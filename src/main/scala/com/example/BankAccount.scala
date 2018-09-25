@@ -1,10 +1,11 @@
 package com.example
 
 import akka.actor.{ActorLogging, Stash}
+import akka.cluster.sharding.ShardRegion
 import akka.persistence.PersistentActor
 
 /**
-  * Companion object.
+  * Bank account companion object.
   */
 case object BankAccount {
 
@@ -29,25 +30,39 @@ case object BankAccount {
     def accountNumber: String
   }
 
-  trait PendingTransaction extends BankAccountEvent
-  trait CommitTransaction extends BankAccountEvent
-  trait RollbackTransaction extends BankAccountEvent
-
+  trait BankAccountTransactionPending extends BankAccountEvent
+  trait BankAccountTransactionCommitted extends BankAccountEvent
+  trait BankAccountTransactionRolledBack extends BankAccountEvent
   trait BankAccountException extends BankAccountEvent
+
   case class BankAccountCreated(customerId: String, accountNumber: String) extends BankAccountEvent
   case class FundsDepositedPending(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountEvent with PendingTransaction
+    extends BankAccountEvent with BankAccountTransactionPending
   case class FundsDepositedReversal(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends RollbackTransaction
+    extends BankAccountTransactionRolledBack
   case class FundsDeposited(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends CommitTransaction
+    extends BankAccountTransactionCommitted
   case class InsufficientFunds(accountNumber: String, balance: BigDecimal, attemptedWithdrawal: BigDecimal)
     extends BankAccountException
   case class FundsWithdrawnPending(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends PendingTransaction
+    extends BankAccountTransactionPending
   case class FundsWithdrawnReversal(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends RollbackTransaction
-  case class FundsWithdrawn(accountNumber: String, transactionId: String, amount: BigDecimal) extends CommitTransaction
+    extends BankAccountTransactionRolledBack
+  case class FundsWithdrawn(accountNumber: String, transactionId: String, amount: BigDecimal)
+    extends BankAccountTransactionCommitted
+
+  val extractEntityId: ShardRegion.ExtractEntityId = {
+    case cmd: BankAccountCommand => (cmd.accountNumber, cmd)
+  }
+
+  val numberOfShards = 3
+
+  val extractShardId: ShardRegion.ExtractShardId = {
+    case cmd: BankAccountCommand => (cmd.accountNumber.hashCode % numberOfShards).toString
+    case ShardRegion.StartEntity(id) ⇒
+      // StartEntity is used by remembering entities feature
+      (id.hashCode % numberOfShards).toString
+  }
 }
 
 /**
@@ -59,7 +74,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
 
   private var accountNumber = ""
 
-  override def persistenceId: String = accountNumber
+  override def persistenceId: String = s"bank-account-$accountNumber"
 
   private var balance: BigDecimal = 0
 
@@ -67,6 +82,8 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
 
   override def receiveCommand: Receive = {
     case CreateBankAccount(customerId, accountNumber) =>
+
+      log.info(s"Creating BankAccount with number $accountNumber")
 
       persist(BankAccountCreated(customerId, accountNumber)) { event =>
         this.accountNumber = accountNumber
