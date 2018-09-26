@@ -2,11 +2,12 @@ package com.example
 
 import akka.actor.{ActorRef, ActorSystem, Props}
 import akka.cluster.sharding.{ClusterSharding, ClusterShardingSettings}
+import akka.util.Timeout
 
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
-abstract class BaseApp(system: ActorSystem) {
+abstract class BaseApp(implicit val system: ActorSystem) {
 
   val sagaTimeout: FiniteDuration = 1.hour
 
@@ -26,9 +27,10 @@ abstract class BaseApp(system: ActorSystem) {
     extractShardId = BankAccountSaga.extractShardId
   )
 
-  val httpServerHost: String = "localhost"
-  val httpServerPort: Int = 9090
-  val httpRequestTimeout: FiniteDuration = 5.seconds
+  val httpServerHost: String = "0.0.0.0"
+  val httpServerPort: Int = 8080
+  implicit val timeout: Timeout = Timeout(5.seconds)
+  val clusterListener = system.actorOf(Props(new SimpleClusterListener))
   val httpServer: BankAccountHttpServer = createHttpServer()
 
   /**
@@ -48,6 +50,7 @@ abstract class BaseApp(system: ActorSystem) {
       httpServerHost,
       httpServerPort,
       bankAccountRegion,
-      bankAccountSagaRegion
-    )(system)
+      bankAccountSagaRegion,
+      clusterListener
+    )(system, timeout)
 }

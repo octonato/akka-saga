@@ -3,14 +3,17 @@ package com.example
 import java.util.UUID
 
 import akka.actor.{ActorRef, ActorSystem}
+import akka.pattern.ask
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
 import akka.http.scaladsl.model.{ContentTypes, HttpEntity, StatusCodes}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
 import akka.stream.ActorMaterializer
+import akka.util.Timeout
 import com.example.BankAccount.{BankAccountTransactionalCommand, CreateBankAccount}
 import com.example.BankAccountSaga.StartTransaction
+import com.example.SimpleClusterListener.MemberList
 import spray.json.{DefaultJsonProtocol, JsValue, RootJsonFormat}
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -31,8 +34,9 @@ class BankAccountHttpServer(
   host: String,
   port: Int,
   bankAccountRegion: ActorRef,
-  bankAccountSagaRegion: ActorRef
-)(implicit system: ActorSystem) extends JsonSupport {
+  bankAccountSagaRegion: ActorRef,
+  clusterListener: ActorRef
+)(implicit system: ActorSystem, timeout: Timeout) extends JsonSupport {
 
   val route: Route =
     path("bank-account") {
@@ -52,11 +56,22 @@ class BankAccountHttpServer(
           complete(StatusCodes.Accepted, s"CreateBankAccount accepted with number: ${cmd.accountNumber}")
         }
       }
+    } ~ pathEndOrSingleSlash {
+      complete {
+        (clusterListener ? SimpleClusterListener.GetMembers)
+          .mapTo[MemberList]
+          .map(template)
+      }
     }
 
   implicit val dispatcher: ExecutionContext = system.dispatcher
   implicit val materializer: ActorMaterializer = ActorMaterializer()
 
-  val binding: Future[Http.ServerBinding] =
-    Http().bindAndHandle(route, host, port)
+  val binding: Future[Http.ServerBinding] = Http().bindAndHandle(route, host, port)
+
+  private def template(members: MemberList): String =
+    s"""|Akka Cluster Members
+        |====================
+        |
+        |${members.members.mkString("\n")}""".stripMargin
 }

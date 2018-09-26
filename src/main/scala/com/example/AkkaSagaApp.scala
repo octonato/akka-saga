@@ -12,11 +12,11 @@ object AkkaSagaApp {
       case None =>      ConfigFactory.load("dev-application.conf")
     }
 
-    val system: ActorSystem = ActorSystem("akka-saga-app", config)
+    implicit val system: ActorSystem = ActorSystem("akka-saga-app", config)
 
-    val app: AkkaSagaApp = new AkkaSagaApp(system)
+    val app: AkkaSagaApp = new AkkaSagaApp()
     app.run()
   }
 }
 
-class AkkaSagaApp(system: ActorSystem) extends BaseApp(system)
+class AkkaSagaApp(implicit system: ActorSystem) extends BaseApp()

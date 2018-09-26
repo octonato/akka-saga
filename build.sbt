@@ -4,13 +4,11 @@ version := "0.1.0"
 
 scalaVersion := "2.12.6"
 
-lazy val akkaVersion = "2.5.16"
+lazy val akkaVersion = "2.5.14"
 
-lazy val httpVersion = "10.1.5"
+lazy val httpVersion = "10.1.3"
 
-enablePlugins(SbtReactiveAppPlugin)
-
-enableAkkaClusterBootstrap := true
+enablePlugins(SbtReactiveAppPlugin, Cinnamon)
 
 scalacOptions := Seq("-Ywarn-unused", "-Ywarn-dead-code", "-Ywarn-unused-import")
 
@@ -19,21 +17,31 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-persistence"      % akkaVersion,
   "com.typesafe.akka" %% "akka-cluster-sharding" % akkaVersion,
   "com.typesafe.akka" %% "akka-http"             % httpVersion,
-  "com.typesafe.akka" %% "akka-http-spray-json"  % httpVersion, 
+  "com.typesafe.akka" %% "akka-http-spray-json"  % httpVersion,
   "com.typesafe.akka" %% "akka-slf4j"            % akkaVersion,
   "com.typesafe.akka" %% "akka-testkit"          % akkaVersion  % "test",
   "org.scalatest"     %% "scalatest"             % "3.0.5"      % "test"
 )
 
-endpoints += HttpEndpoint("http", HttpIngress(Vector(80, 443), Vector.empty, Vector("/cluster-example")))
+// Add Cinnamon library dependencies.
+libraryDependencies ++= Vector(
+  Cinnamon.library.cinnamonCHMetrics,
+  Cinnamon.library.cinnamonAkka,
+  Cinnamon.library.cinnamonAkkaHttp,
+  Cinnamon.library.cinnamonJvmMetricsProducer,
+  Cinnamon.library.cinnamonPrometheus,
+  Cinnamon.library.cinnamonPrometheusHttpServer
+)
 
 mainClass in Compile := Some("com.example.AkkaSagaApp")
 
-applications += "akka-saga" -> Vector("bin/akka-saga")
+enableAkkaClusterBootstrap := true
 
-deployMinikubeRpArguments ++= Vector(
-  "--ingress-annotation", "ingress.kubernetes.io/rewrite-target=/",
-  "--ingress-annotation", "nginx.ingress.kubernetes.io/rewrite-target=/"
+endpoints += TcpEndpoint("cinnamon", 9091, None)
+endpoints += HttpEndpoint("http", 8080, HttpIngress(Seq(80), Seq("akka-saga.io"), Seq("/")))
+
+annotations := Map(
+  // enable scraping
+  "prometheus.io/scrape" -> "true",
+  "prometheus.io/port" -> "9091"
 )
-
-deployMinikubeAkkaClusterBootstrapContactPoints := 3
