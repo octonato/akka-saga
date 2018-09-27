@@ -5,6 +5,9 @@ import com.typesafe.config.ConfigFactory
 
 import scala.util.Properties
 
+/**
+  * This is the runtime app, which wraps the abstract BaseApp
+  */
 object AkkaSagaApp {
   def main(args: Array[String]): Unit = {
     val config = Properties.envOrNone("RP" + "_PLATFORM")  match {

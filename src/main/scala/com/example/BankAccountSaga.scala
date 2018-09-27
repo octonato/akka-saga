@@ -14,7 +14,7 @@ import scala.concurrent.duration._
   */
 object BankAccountSaga {
 
-  case class StartTransaction(commands: Seq[BankAccountTransactionalCommand], transactionId: Option[String])
+  case class StartTransaction(commands: Seq[BankAccountTransactionalCommand], transactionId: Option[String] = None)
 
   val extractEntityId: ShardRegion.ExtractEntityId = {
     case cmd: StartTransaction => (cmd.transactionId.getOrElse(
@@ -133,7 +133,7 @@ class BankAccountSaga(bankAccountRegion: ActorRef, timeout: FiniteDuration)
     */
   def startTransactions(): Unit =
     state.commands.foreach( a =>
-      bankAccountRegion ! Pending(a)
+      bankAccountRegion ! Pending(a, transactionId)
     )
 
   /**
@@ -151,7 +151,7 @@ class BankAccountSaga(bankAccountRegion: ActorRef, timeout: FiniteDuration)
     */
   def commit(): Unit =
     state.pendingTransactions.foreach( p =>
-      bankAccountRegion ! Commit(p)
+      bankAccountRegion ! Commit(p, transactionId)
     )
 
   /**
@@ -159,7 +159,7 @@ class BankAccountSaga(bankAccountRegion: ActorRef, timeout: FiniteDuration)
     */
   def rollback(): Unit = {
     state.commands.foreach( c =>
-      bankAccountRegion ! Rollback(c)
+      bankAccountRegion ! Rollback(c, transactionId)
     )
   }
 

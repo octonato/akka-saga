@@ -14,17 +14,19 @@ case object BankAccount {
   }
 
   trait BankAccountTransactionalCommand extends BankAccountCommand {
-    def transactionId: String
     def amount: BigDecimal
+    def transactionType: String
   }
 
   case class CreateBankAccount(customerId: String, accountNumber: String) extends BankAccountCommand
-  case class DepositFunds(accountNumber: String, transactionId: String, amount: BigDecimal) extends BankAccountTransactionalCommand
-  case class WithdrawFunds(accountNumber: String, transactionId: String, amount: BigDecimal) extends BankAccountTransactionalCommand
+  case class DepositFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = "deposit")
+    extends BankAccountTransactionalCommand
+  case class WithdrawFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = "withdraw")
+    extends BankAccountTransactionalCommand
 
-  case class Pending(command: BankAccountTransactionalCommand)
-  case class Commit(command: BankAccountTransactionalCommand)
-  case class Rollback(command: BankAccountTransactionalCommand)
+  case class Pending(command: BankAccountTransactionalCommand, transactionId: String)
+  case class Commit(command: BankAccountTransactionalCommand, transactionId: String)
+  case class Rollback(command: BankAccountTransactionalCommand, transactionId: String)
 
   trait BankAccountEvent {
     def accountNumber: String
@@ -92,7 +94,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
   }
 
   def active: Receive = {
-    case Pending(DepositFunds(_, transactionId, amount))  =>
+    case Pending(DepositFunds(_, amount, _), transactionId)  =>
 
       persist(FundsDepositedPending(accountNumber, transactionId, amount)) { event =>
         balance = balance + amount
@@ -101,7 +103,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
         context.become(inTransaction)
       }
 
-    case Pending(WithdrawFunds(_, transactionId, amount)) =>
+    case Pending(WithdrawFunds(_, amount, _), transactionId) =>
 
       if (balance - amount > 0)
         persist(FundsWithdrawnPending(accountNumber, transactionId, amount)) { event =>
@@ -116,21 +118,21 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
   }
 
   def inTransaction: Receive = {
-    case Commit(DepositFunds(_, transactionId, amount)) =>
+    case Commit(DepositFunds(_, amount, _), transactionId) =>
       persist(FundsDeposited(accountNumber, transactionId, amount)) { event =>
         sideEffectEvent(event)
         context.become(active)
         unstashAll()
       }
 
-    case Commit(WithdrawFunds(_, transactionId, amount)) =>
+    case Commit(WithdrawFunds(_, amount, _), transactionId) =>
       persist(FundsWithdrawn(accountNumber, transactionId, amount)) { event =>
         sideEffectEvent(event)
         context.become(active)
         unstashAll()
       }
 
-    case Rollback(DepositFunds(_, transactionId, amount)) =>
+    case Rollback(DepositFunds(_, amount, _), transactionId) =>
       persist(FundsDepositedReversal(accountNumber, transactionId, amount)) { event =>
         balance = balance - amount
         sideEffectEvent(event)
@@ -138,7 +140,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
         unstashAll()
       }
 
-    case Rollback(WithdrawFunds(_, transactionId, amount)) =>
+    case Rollback(WithdrawFunds(_, amount, _), transactionId) =>
       persist(FundsWithdrawnReversal(accountNumber, transactionId, amount)) { event =>
         balance = balance + amount
         sideEffectEvent(event)

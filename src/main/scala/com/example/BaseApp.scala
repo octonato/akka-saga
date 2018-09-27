@@ -7,6 +7,10 @@ import akka.util.Timeout
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
+/**
+  * Test friendly abstract application.
+  * @param system ActorSystem
+  */
 abstract class BaseApp(implicit val system: ActorSystem) {
 
   val sagaTimeout: FiniteDuration = 1.hour

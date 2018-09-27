@@ -4,11 +4,17 @@ import akka.actor._
 import akka.cluster._
 import ClusterEvent._
 
+/**
+  * Companion.
+  */
 object SimpleClusterListener {
   case object GetMembers
   case class MemberList(members: List[String])
 }
 
+/**
+  * The purpose of this listener is to allow any http node to be hit and to reply with a list of nodes.
+  */
 class SimpleClusterListener extends Actor with ActorLogging {
   import SimpleClusterListener._
 
