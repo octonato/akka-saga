@@ -13,15 +13,18 @@ enablePlugins(SbtReactiveAppPlugin, Cinnamon)
 scalacOptions := Seq("-Ywarn-unused", "-Ywarn-dead-code", "-Ywarn-unused-import")
 
 libraryDependencies ++= Seq(
-  "com.typesafe.akka" %% "akka-actor"            % akkaVersion,
-  "com.typesafe.akka" %% "akka-persistence"      % akkaVersion,
-  "com.typesafe.akka" %% "akka-cluster-sharding" % akkaVersion,
-  "com.typesafe.akka" %% "akka-http"             % httpVersion,
-  "com.typesafe.akka" %% "akka-http-spray-json"  % httpVersion,
-  "com.typesafe.akka" %% "akka-slf4j"            % akkaVersion,
-  "com.typesafe.akka" %% "akka-testkit"          % akkaVersion  % "test",
-  "com.typesafe.akka" %% "akka-http-testkit"     % httpVersion  % "test",
-  "org.scalatest"     %% "scalatest"             % "3.0.5"      % "test"
+  "com.typesafe.akka"         %% "akka-actor"                % akkaVersion,
+  "com.typesafe.akka"         %% "akka-persistence"          % akkaVersion,
+  "com.typesafe.akka"         %% "akka-cluster-sharding"     % akkaVersion,
+  "com.typesafe.akka"         %% "akka-http"                 % httpVersion,
+  "com.typesafe.akka"         %% "akka-http-spray-json"      % httpVersion,
+  "com.typesafe.akka"         %% "akka-slf4j"                % akkaVersion,
+  "com.typesafe.akka"         %% "akka-testkit"              % akkaVersion  % "test",
+  "com.typesafe.akka"         %% "akka-http-testkit"         % httpVersion  % "test",
+  "org.iq80.leveldb"           % "leveldb"                   % "0.10"       % "test",
+  "org.fusesource.leveldbjni"  % "leveldbjni-all"            % "1.8"        % "test",
+  "com.typesafe.akka"         %% "akka-persistence-query"    % akkaVersion  % "test",
+  "org.scalatest"             %% "scalatest"                 % "3.0.5"      % "test"
 )
 
 // Add Cinnamon library dependencies.
@@ -46,3 +49,5 @@ annotations := Map(
   "prometheus.io/scrape" -> "true",
   "prometheus.io/port" -> "9091"
 )
+
+fork := true

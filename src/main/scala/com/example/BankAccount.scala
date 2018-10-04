@@ -19,10 +19,12 @@ case object BankAccount {
   }
 
   case class CreateBankAccount(customerId: String, accountNumber: String) extends BankAccountCommand
-  case class DepositFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = "deposit")
+  case class DepositFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = "DepositFunds")
     extends BankAccountTransactionalCommand
-  case class WithdrawFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = "withdraw")
+  case class WithdrawFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = "WithdrawFunds")
     extends BankAccountTransactionalCommand
+  case class GetBankAccount(accountNumber: String) extends BankAccountCommand
+  case object GetState
 
   case class Pending(command: BankAccountTransactionalCommand, transactionId: String)
   case class Commit(command: BankAccountTransactionalCommand, transactionId: String)
@@ -32,7 +34,10 @@ case object BankAccount {
     def accountNumber: String
   }
 
-  trait BankAccountTransactionPending extends BankAccountEvent
+  trait BankAccountTransactionPending extends BankAccountEvent {
+    def amount: BigDecimal
+  }
+
   trait BankAccountTransactionCommitted extends BankAccountEvent
   trait BankAccountTransactionRolledBack extends BankAccountEvent
   trait BankAccountException extends BankAccountEvent
@@ -57,15 +62,17 @@ case object BankAccount {
     case cmd: BankAccountCommand => (cmd.accountNumber, cmd)
   }
 
-  val numberOfShards = 3
+  val BankAccountShardCount = 2 // TODO: get from config
 
   val extractShardId: ShardRegion.ExtractShardId = {
-    case cmd: BankAccountCommand => (cmd.accountNumber.hashCode % numberOfShards).toString
+    case cmd: BankAccountCommand => (cmd.accountNumber.hashCode % BankAccountShardCount).toString
     case ShardRegion.StartEntity(id) ⇒
       // StartEntity is used by remembering entities feature
-      (id.hashCode % numberOfShards).toString
+      (id.hashCode % BankAccountShardCount).toString
   }
 }
+
+case class BankAccountState(currentState: String = "uninitialized", balance: BigDecimal = 0, pendingBalance: BigDecimal = 0)
 
 /**
   * I am a bank account modeled as persistent actor.
@@ -74,103 +81,119 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
 
   import BankAccount._
 
-  private var accountNumber = ""
+  override def persistenceId: String = self.path.name
 
-  override def persistenceId: String = s"bank-account-$accountNumber"
+  private var state: BankAccountState = BankAccountState()
 
-  private var balance: BigDecimal = 0
+  override def receiveCommand: Receive = default.orElse(stateReporting)
 
-  private val pendingTransactions: Seq[BankAccountEvent] = Seq.empty
+  def default: Receive = {
 
-  override def receiveCommand: Receive = {
     case CreateBankAccount(customerId, accountNumber) =>
-
-      log.info(s"Creating BankAccount with number $accountNumber")
-
-      persist(BankAccountCreated(customerId, accountNumber)) { event =>
-        this.accountNumber = accountNumber
-        context.become(active)
+      persist(BankAccountCreated(customerId, accountNumber)) { _ =>
+        log.info(s"Creating BankAccount with persistenceId $persistenceId")
+        transitionToActive()
       }
   }
 
   def active: Receive = {
     case Pending(DepositFunds(_, amount, _), transactionId)  =>
-
-      persist(FundsDepositedPending(accountNumber, transactionId, amount)) { event =>
-        balance = balance + amount
-        pendingTransactions :+ event
-        sideEffectEvent(event)
-        context.become(inTransaction)
+      persist(FundsDepositedPending(persistenceId, transactionId, amount)) { evt =>
+        state = state.copy(pendingBalance = state.balance + amount)
+        transitionToInTransaction(evt )
       }
 
     case Pending(WithdrawFunds(_, amount, _), transactionId) =>
-
-      if (balance - amount > 0)
-        persist(FundsWithdrawnPending(accountNumber, transactionId, amount)) { event =>
-          balance = balance - amount
-          sideEffectEvent(event)
-          context.become(inTransaction)
+      if (state.balance - amount > 0)
+        persist(FundsWithdrawnPending(persistenceId, transactionId, amount)) { evt =>
+          state = state.copy(pendingBalance = state.balance - amount)
+          transitionToInTransaction(evt)
         }
       else
-        persist(InsufficientFunds(accountNumber, balance, amount)) { event =>
-          sideEffectEvent(event)
-        }
+        persist(InsufficientFunds(persistenceId, state.balance, amount))(_)
   }
 
-  def inTransaction: Receive = {
-    case Commit(DepositFunds(_, amount, _), transactionId) =>
-      persist(FundsDeposited(accountNumber, transactionId, amount)) { event =>
-        sideEffectEvent(event)
-        context.become(active)
-        unstashAll()
-      }
+  def inTransaction(processing: BankAccountTransactionPending): Receive = {
+    case transaction @ Commit(DepositFunds(_, amount, transactionType), transactionId) =>
+      if (amount == processing.amount && transactionType == "DepositFunds")
+        persist(FundsDeposited(persistenceId, transactionId, amount)) { event =>
+          state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
+          transitionToActive()
+        }
+      else
+        log.error(s"Attempt to commit ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
+          s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
 
     case Commit(WithdrawFunds(_, amount, _), transactionId) =>
-      persist(FundsWithdrawn(accountNumber, transactionId, amount)) { event =>
-        sideEffectEvent(event)
-        context.become(active)
-        unstashAll()
+      persist(FundsWithdrawn(persistenceId, transactionId, amount)) { _ =>
+        state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
+        transitionToActive()
       }
 
     case Rollback(DepositFunds(_, amount, _), transactionId) =>
-      persist(FundsDepositedReversal(accountNumber, transactionId, amount)) { event =>
-        balance = balance - amount
-        sideEffectEvent(event)
-        context.become(active)
-        unstashAll()
+      persist(FundsDepositedReversal(persistenceId, transactionId, amount)) { _ =>
+        state = state.copy(pendingBalance = 0)
+        transitionToActive()
       }
 
     case Rollback(WithdrawFunds(_, amount, _), transactionId) =>
-      persist(FundsWithdrawnReversal(accountNumber, transactionId, amount)) { event =>
-        balance = balance + amount
-        sideEffectEvent(event)
-        context.become(active)
-        unstashAll()
+      persist(FundsWithdrawnReversal(persistenceId, transactionId, amount)) { _ =>
+        state = state.copy(pendingBalance = 0)
+        transitionToActive()
       }
+  }
 
-    case _ =>
-      stash()
+  /**
+    * Report current state for ease of testing.
+    */
+  def stateReporting: Receive = {
+    case GetState => sender() ! state
+    case _ => stash()
+  }
+
+  /**
+    * Change to this state (context.become) while changing currentState value.
+    */
+  private def transitionToActive(): Unit = {
+    state = state.copy(currentState = "active")
+    context.become(active.orElse(stateReporting))
+    unstashAll()
+  }
+
+  /**
+    * Change to this state (context.become) while changing currentState value.
+    */
+  private def transitionToInTransaction(processing: BankAccountTransactionPending): Unit = {
+    state = state.copy(currentState = "inTransaction")
+    context.become(inTransaction(processing).orElse(stateReporting))
   }
 
   override def receiveRecover: Receive = {
-    case BankAccountCreated(_, accountNumber) =>
-      this.accountNumber = accountNumber
-      context.become(active)
+    case _: BankAccountCreated =>
+      transitionToActive()
 
-    case FundsDepositedPending(_, _, amount) =>
-      balance = balance + amount
+    case evt @ FundsDepositedPending(_, _, amount) =>
+      transitionToInTransaction(evt)
+      state = state.copy(pendingBalance = state.pendingBalance + amount)
 
-    case FundsDepositedReversal(_, _, amount) =>
-      balance = balance - amount
+    case _: FundsDeposited =>
+      transitionToActive()
+      state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
 
-    case FundsWithdrawnPending(_, _, amount) =>
-      balance = balance - amount
+    case _: FundsDepositedReversal =>
+      transitionToActive()
+      state = state.copy(pendingBalance = 0)
 
-    case FundsWithdrawnReversal(_, _, amount) =>
-      balance = balance + amount
-  }
+    case evt @ FundsWithdrawnPending(_, _, amount) =>
+      transitionToInTransaction(evt)
+      state = state.copy(pendingBalance = state.pendingBalance - amount)
 
-  private def sideEffectEvent(event: BankAccountEvent): Unit = {
-    sender() ! event
+    case _: FundsWithdrawn =>
+      transitionToActive()
+      state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
+
+    case _: FundsWithdrawnReversal =>
+      transitionToActive()
+      state = state.copy(pendingBalance = 0)
   }
 }

@@ -1,20 +1,25 @@
 package com.example
 
-import org.scalatest.{Matchers, WordSpecLike}
+import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 import akka.http.scaladsl.testkit.ScalatestRouteTest
 import akka.actor.{Actor, ActorRef, Props}
 import akka.http.scaladsl.model.StatusCodes
-import akka.testkit.TestProbe
+import akka.testkit.{TestKit, TestProbe}
 import akka.util.Timeout
 import com.example.BankAccount.{CreateBankAccount, WithdrawFunds}
 import com.example.BankAccountSaga.StartTransaction
 
 import scala.concurrent.duration._
 
-class BankAccountRoutesSpec extends WordSpecLike with Matchers with ScalatestRouteTest with BankAccountHttpRoutes {
+class BankAccountRoutesSpec extends WordSpecLike
+  with Matchers with ScalatestRouteTest with BankAccountHttpRoutes with BeforeAndAfterAll{
 
   override implicit val timeout: Timeout = 5.seconds
   override val clusterListener: ActorRef = null // not testing this
+
+  override def afterAll: Unit = {
+    TestKit.shutdownActorSystem(system)
+  }
 
   var IdToReturn: Option[String] = None
   override def transactionIdGenerator: TransactionIdGenerator = new TransactionIdGenerator {

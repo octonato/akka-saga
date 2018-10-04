@@ -15,6 +15,9 @@ abstract class BaseApp(implicit val system: ActorSystem) {
 
   val sagaTimeout: FiniteDuration = 1.hour
 
+  val BankAccountSagaShardCount = 2
+  val BankAccountShardCount = 2
+
   val bankAccountRegion: ActorRef = ClusterSharding(system).start(
     typeName = "bank-account",
     entityProps = Props[BankAccount],

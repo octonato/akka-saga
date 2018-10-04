@@ -32,8 +32,8 @@ trait BankAccountJsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
       }
 
     override def read(json: JsValue): BankAccountTransactionalCommand = json.asJsObject.fields.get("transactionType") match {
-        case Some(JsString("withdraw")) => json.asJsObject.convertTo[WithdrawFunds]
-        case Some(JsString("deposit")) => json.asJsObject.convertTo[DepositFunds]
+        case Some(JsString("WithdrawFunds")) => json.asJsObject.convertTo[WithdrawFunds]
+        case Some(JsString("DepositFunds")) => json.asJsObject.convertTo[DepositFunds]
         case _ => throw new RuntimeException(s"Invalid json format: $json")
       }
   }

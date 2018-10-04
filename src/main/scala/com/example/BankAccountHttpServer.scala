@@ -8,7 +8,7 @@ import akka.util.Timeout
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
-  * A runtime compositon of an Http server.
+  * A runtime composition of an Http server.
   */
 class BankAccountHttpServer(
   host: String,

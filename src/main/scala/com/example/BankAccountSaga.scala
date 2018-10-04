@@ -21,14 +21,14 @@ object BankAccountSaga {
       throw new Exception("StartTransaction command missing transactionId")), cmd)
   }
 
-  val numberOfShards = 1
+  val BankAccountSagaShardCount = 1 // Todo: get from config
 
   val extractShardId: ShardRegion.ExtractShardId = {
     case cmd: StartTransaction => (cmd.transactionId.getOrElse(
-      throw new Exception("StartTransaction command missing transactionId")).hashCode % numberOfShards).toString
+      throw new Exception("StartTransaction command missing transactionId")).hashCode % BankAccountSagaShardCount).toString
     case ShardRegion.StartEntity(id) ⇒
       // StartEntity is used by remembering entities feature
-      (id.hashCode % numberOfShards).toString
+      (id.hashCode % BankAccountSagaShardCount).toString
   }
 
   def props(bankAccountRegion: ActorRef, timeout: FiniteDuration): Props =
