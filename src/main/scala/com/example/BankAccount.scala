@@ -124,23 +124,35 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
         log.error(s"Attempt to commit ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
           s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
 
-    case Commit(WithdrawFunds(_, amount, _), transactionId) =>
-      persist(FundsWithdrawn(persistenceId, transactionId, amount)) { _ =>
-        state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
-        transitionToActive()
-      }
+    case transaction @ Commit(WithdrawFunds(_, amount, transactionType), transactionId) =>
+      if (amount == processing.amount && transactionType == "WithdrawFunds")
+        persist(FundsWithdrawn(persistenceId, transactionId, amount)) { _ =>
+          state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
+          transitionToActive()
+        }
+      else
+        log.error(s"Attempt to commit ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
+          s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
 
-    case Rollback(DepositFunds(_, amount, _), transactionId) =>
-      persist(FundsDepositedReversal(persistenceId, transactionId, amount)) { _ =>
-        state = state.copy(pendingBalance = 0)
-        transitionToActive()
-      }
+    case transaction @ Rollback(DepositFunds(_, amount, transactionType), transactionId) =>
+      if (amount == processing.amount && transactionType == "DepositFunds")
+        persist(FundsDepositedReversal(persistenceId, transactionId, amount)) { _ =>
+          state = state.copy(pendingBalance = 0)
+          transitionToActive()
+        }
+      else
+        log.error(s"Attempt to rollback ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
+          s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
 
-    case Rollback(WithdrawFunds(_, amount, _), transactionId) =>
-      persist(FundsWithdrawnReversal(persistenceId, transactionId, amount)) { _ =>
-        state = state.copy(pendingBalance = 0)
-        transitionToActive()
-      }
+    case transaction @ Rollback(WithdrawFunds(_, amount, transactionType), transactionId) =>
+      if (amount == processing.amount && transactionType == "WithdrawFunds")
+        persist(FundsWithdrawnReversal(persistenceId, transactionId, amount)) { _ =>
+          state = state.copy(pendingBalance = 0)
+          transitionToActive()
+        }
+      else
+        log.error(s"Attempt to rollback ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
+          s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
   }
 
   /**
@@ -174,7 +186,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
 
     case evt @ FundsDepositedPending(_, _, amount) =>
       transitionToInTransaction(evt)
-      state = state.copy(pendingBalance = state.pendingBalance + amount)
+      state = state.copy(pendingBalance = state.balance + amount)
 
     case _: FundsDeposited =>
       transitionToActive()
@@ -186,7 +198,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
 
     case evt @ FundsWithdrawnPending(_, _, amount) =>
       transitionToInTransaction(evt)
-      state = state.copy(pendingBalance = state.pendingBalance - amount)
+      state = state.copy(pendingBalance = state.balance - amount)
 
     case _: FundsWithdrawn =>
       transitionToActive()
