@@ -16,7 +16,7 @@ class BankAccountHttpServer(
   override val bankAccountRegion: ActorRef,
   override val bankAccountSagaRegion: ActorRef,
   override val clusterListener: ActorRef
-)(override implicit val system: ActorSystem, override val timeout: Timeout) extends BankAccountHttpRoutes {
+)(override implicit val system: ActorSystem, override val timeout: Timeout) extends BankAccountRoutes {
 
   implicit val dispatcher: ExecutionContext = system.dispatcher
   implicit val materializer: ActorMaterializer = ActorMaterializer()

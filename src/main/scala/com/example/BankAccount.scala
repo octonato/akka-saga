@@ -3,6 +3,7 @@ package com.example
 import akka.actor.{ActorLogging, Stash}
 import akka.cluster.sharding.ShardRegion
 import akka.persistence.PersistentActor
+import akka.persistence.journal.Tagged
 
 /**
   * Bank account companion object.
@@ -24,7 +25,7 @@ case object BankAccount {
   case class WithdrawFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = "WithdrawFunds")
     extends BankAccountTransactionalCommand
   case class GetBankAccount(accountNumber: String) extends BankAccountCommand
-  case object GetState
+  case object GetBankAccountState
 
   case class Pending(command: BankAccountTransactionalCommand, transactionId: String)
   case class Commit(command: BankAccountTransactionalCommand, transactionId: String)
@@ -35,10 +36,15 @@ case object BankAccount {
   }
 
   trait BankAccountTransactionPending extends BankAccountEvent {
+    def transactionId: String
     def amount: BigDecimal
   }
 
-  trait BankAccountTransactionCommitted extends BankAccountEvent
+  trait BankAccountTransactionCommitted extends BankAccountEvent {
+    def transactionId: String
+    def amount: BigDecimal
+  }
+
   trait BankAccountTransactionRolledBack extends BankAccountEvent
   trait BankAccountException extends BankAccountEvent
 
@@ -70,9 +76,12 @@ case object BankAccount {
       // StartEntity is used by remembering entities feature
       (id.hashCode % BankAccountShardCount).toString
   }
-}
 
-case class BankAccountState(currentState: String = "uninitialized", balance: BigDecimal = 0, pendingBalance: BigDecimal = 0)
+  case class BankAccountState(
+    currentState: String = "uninitialized",
+    balance: BigDecimal = 0,
+    pendingBalance: BigDecimal = 0)
+}
 
 /**
   * I am a bank account modeled as persistent actor.
@@ -98,25 +107,29 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
 
   def active: Receive = {
     case Pending(DepositFunds(_, amount, _), transactionId)  =>
-      persist(FundsDepositedPending(persistenceId, transactionId, amount)) { evt =>
+      persist(Tagged(FundsDepositedPending(persistenceId, transactionId, amount), Set(transactionId))) { evt =>
         state = state.copy(pendingBalance = state.balance + amount)
-        transitionToInTransaction(evt )
+        transitionToInTransaction(evt.payload.asInstanceOf[BankAccountTransactionPending])
       }
 
     case Pending(WithdrawFunds(_, amount, _), transactionId) =>
       if (state.balance - amount > 0)
-        persist(FundsWithdrawnPending(persistenceId, transactionId, amount)) { evt =>
+        persist(Tagged(FundsWithdrawnPending(persistenceId, transactionId, amount), Set( transactionId))) { evt =>
           state = state.copy(pendingBalance = state.balance - amount)
-          transitionToInTransaction(evt)
+          transitionToInTransaction(evt.payload.asInstanceOf[BankAccountTransactionPending])
         }
-      else
-        persist(InsufficientFunds(persistenceId, state.balance, amount))(_)
+      else {
+        persist(Tagged(InsufficientFunds(persistenceId, state.balance, amount), Set(transactionId)))
+          { _ =>
+            transitionToActive()
+          }
+      }
   }
 
   def inTransaction(processing: BankAccountTransactionPending): Receive = {
     case transaction @ Commit(DepositFunds(_, amount, transactionType), transactionId) =>
       if (amount == processing.amount && transactionType == "DepositFunds")
-        persist(FundsDeposited(persistenceId, transactionId, amount)) { event =>
+        persist(Tagged(FundsDeposited(persistenceId, transactionId, amount), Set(transactionId))) { _ =>
           state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
           transitionToActive()
         }
@@ -126,7 +139,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
 
     case transaction @ Commit(WithdrawFunds(_, amount, transactionType), transactionId) =>
       if (amount == processing.amount && transactionType == "WithdrawFunds")
-        persist(FundsWithdrawn(persistenceId, transactionId, amount)) { _ =>
+        persist(Tagged(FundsWithdrawn(persistenceId, transactionId, amount), Set(transactionId))) { _ =>
           state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
           transitionToActive()
         }
@@ -136,20 +149,22 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
 
     case transaction @ Rollback(DepositFunds(_, amount, transactionType), transactionId) =>
       if (amount == processing.amount && transactionType == "DepositFunds")
-        persist(FundsDepositedReversal(persistenceId, transactionId, amount)) { _ =>
-          state = state.copy(pendingBalance = 0)
-          transitionToActive()
-        }
+        persist(Tagged(FundsDepositedReversal(persistenceId, transactionId, amount), Set(transactionId)))
+          { _ =>
+            state = state.copy(pendingBalance = 0)
+            transitionToActive()
+          }
       else
         log.error(s"Attempt to rollback ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
           s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
 
     case transaction @ Rollback(WithdrawFunds(_, amount, transactionType), transactionId) =>
       if (amount == processing.amount && transactionType == "WithdrawFunds")
-        persist(FundsWithdrawnReversal(persistenceId, transactionId, amount)) { _ =>
-          state = state.copy(pendingBalance = 0)
-          transitionToActive()
-        }
+        persist(Tagged(FundsWithdrawnReversal(persistenceId, transactionId, amount), Set(transactionId)))
+          { _ =>
+            state = state.copy(pendingBalance = 0)
+            transitionToActive()
+          }
       else
         log.error(s"Attempt to rollback ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
           s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
@@ -159,7 +174,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
     * Report current state for ease of testing.
     */
   def stateReporting: Receive = {
-    case GetState => sender() ! state
+    case GetBankAccountState => sender() ! state
     case _ => stash()
   }
 

@@ -49,7 +49,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
     "properly be created with CreateBankAccount command" in {
       val cmd = CreateBankAccount(CustomerNumber, AccountNumber)
       bankAccount ! cmd
-      bankAccount ! GetState
+      bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("active", 0, 0))
 
       val src: Source[EventEnvelope, NotUsed] =
@@ -63,7 +63,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val Amount = BigDecimal.valueOf(10)
       val cmd = Pending(DepositFunds(AccountNumber, Amount), TransactionId)
       bankAccount ! cmd
-      bankAccount ! GetState
+      bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("inTransaction", 0, 10))
 
       val src: Source[EventEnvelope, NotUsed] =
@@ -79,7 +79,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val Amount = BigDecimal.valueOf(5)
       val cmd = Pending(WithdrawFunds(AccountNumber, Amount), TransactionId)
       bankAccount ! cmd
-      bankAccount ! GetState
+      bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("inTransaction", 0, 10))
 
       val src: Source[EventEnvelope, NotUsed] =
@@ -93,7 +93,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val FakeAmount = BigDecimal.valueOf(99)
       val cmd = Commit(DepositFunds(AccountNumber, FakeAmount), FakeTransactionId)
       bankAccount ! cmd
-      bankAccount ! GetState
+      bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("inTransaction", 0, 10))
     }
 
@@ -105,7 +105,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val Amount = BigDecimal.valueOf(5)
       val cmd = Commit(DepositFunds(AccountNumber, PreviousAmount), PreviousTransactionId)
       bankAccount ! cmd
-      bankAccount ! GetState
+      bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("inTransaction", 10, 5))
 
       val src1: Source[EventEnvelope, NotUsed] =
@@ -124,7 +124,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val FakeAmount = BigDecimal.valueOf(99)
       val cmd = Commit(DepositFunds(AccountNumber, FakeAmount), FakeTransactionId)
       bankAccount ! cmd
-      bankAccount ! GetState
+      bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("inTransaction", 10, 5))
     }
 
@@ -133,7 +133,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val Amount = BigDecimal.valueOf(5)
       val cmd = Commit(WithdrawFunds(AccountNumber, Amount), TransactionId)
       bankAccount ! cmd
-      bankAccount ! GetState
+      bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("active", 5, 0))
 
       val src: Source[EventEnvelope, NotUsed] =
@@ -160,7 +160,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val evt2 = Await.result(src2.map(_.event).runWith(Sink.head), timeout.duration)
       evt2 shouldBe(FundsDepositedReversal(AccountNumber, TransactionId, Amount))
 
-      bankAccount ! GetState
+      bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("active", 5, 0))
     }
 
@@ -191,16 +191,8 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
 
       val bankAccount2 = system.actorOf(Props(classOf[BankAccount]), AccountNumber)
 
-      def wait: Boolean = Await.result((bankAccount2 ? GetState).mapTo[BankAccountState], timeout.duration) == BankAccountState("active", 5, 0)
+      def wait: Boolean = Await.result((bankAccount2 ? GetBankAccountState).mapTo[BankAccountState], timeout.duration) == BankAccountState("active", 5, 0)
       awaitCond(wait, timeout.duration, 100.milliseconds)
     }
-  }
-
-  private def printJournal(): Unit = {
-    Thread.sleep(5000)
-    implicit val mat = ActorMaterializer()(system)
-    val queries = PersistenceQuery(system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
-    val src: Source[EventEnvelope, NotUsed] = queries.eventsByPersistenceId("accountNumber1", 0L, Long.MaxValue)
-    src.runForeach { event ⇒ println("Event: " + event) }
   }
 }

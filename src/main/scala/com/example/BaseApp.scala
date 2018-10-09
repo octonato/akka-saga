@@ -2,6 +2,8 @@ package com.example
 
 import akka.actor.{ActorRef, ActorSystem, Props}
 import akka.cluster.sharding.{ClusterSharding, ClusterShardingSettings}
+import akka.persistence.query.PersistenceQuery
+import akka.persistence.query.journal.leveldb.scaladsl.LeveldbReadJournal
 import akka.util.Timeout
 
 import scala.concurrent.Await
@@ -26,9 +28,11 @@ abstract class BaseApp(implicit val system: ActorSystem) {
     extractShardId = BankAccount.extractShardId
   )
 
+  val readJournal = PersistenceQuery(system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
+
   val bankAccountSagaRegion: ActorRef = ClusterSharding(system).start(
     typeName = "bank-account-saga",
-    entityProps = BankAccountSaga.props(bankAccountRegion, sagaTimeout),
+    entityProps = BankAccountSaga.props(bankAccountRegion, sagaTimeout, readJournal),
     settings = ClusterShardingSettings(system),
     extractEntityId = BankAccountSaga.extractEntityId,
     extractShardId = BankAccountSaga.extractShardId

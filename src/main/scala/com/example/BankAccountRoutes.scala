@@ -12,7 +12,7 @@ import akka.http.scaladsl.server.Directives._
 import akka.stream.ActorMaterializer
 import akka.util.Timeout
 import com.example.BankAccount._
-import com.example.BankAccountSaga.StartTransaction
+import com.example.BankAccountSaga.{StartBankAccountSaga}
 import com.example.SimpleClusterListener.MemberList
 import spray.json._
 
@@ -38,7 +38,7 @@ trait BankAccountJsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
       }
   }
 
-  implicit val startTransactionFormat = jsonFormat2(StartTransaction)
+  implicit val startTransactionFormat = jsonFormat1(StartTransaction)
 }
 
 /**
@@ -46,22 +46,22 @@ trait BankAccountJsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
   * and randomly generate them at runtime.
   */
 trait TransactionIdGenerator {
-
-  def generateId: Option[String]
+  def generateId: String
 }
 
 /**
   * Runtime, default impl for above trait.
   */
 class TransactionIdGeneratorImpl extends TransactionIdGenerator {
-
-  override def generateId: Option[String] = Some(UUID.randomUUID().toString)
+  override def generateId: String = UUID.randomUUID().toString
 }
+
+case class StartTransaction(commands: Seq[BankAccountTransactionalCommand])
 
 /**
   * Http routes for bank account.
   */
-trait BankAccountHttpRoutes extends BankAccountJsonSupport {
+trait BankAccountRoutes extends BankAccountJsonSupport {
 
   def bankAccountSagaRegion: ActorRef
   def bankAccountRegion: ActorRef
@@ -81,9 +81,9 @@ trait BankAccountHttpRoutes extends BankAccountJsonSupport {
       } ~
       post {
         entity(as[StartTransaction]) { cmd =>
-          val withId = cmd.copy(transactionId = transactionIdGenerator.generateId)
-          bankAccountSagaRegion ! withId
-          complete(StatusCodes.Accepted, s"Transaction accepted with id: ${withId.transactionId.get}")
+          val start = StartBankAccountSaga(cmd.commands, transactionIdGenerator.generateId)
+          bankAccountSagaRegion ! start
+          complete(StatusCodes.Accepted, s"Transaction accepted with id: ${start.transactionId}")
         }
       } ~
       post {
