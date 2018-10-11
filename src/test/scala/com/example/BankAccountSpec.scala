@@ -61,7 +61,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
     "accept pending DepositFunds command and transition to inTransaction state" in {
       val TransactionId = "transactionId1"
       val Amount = BigDecimal.valueOf(10)
-      val cmd = Pending(DepositFunds(AccountNumber, Amount), TransactionId)
+      val cmd = PendingTransaction(DepositFunds(AccountNumber, Amount), TransactionId)
       bankAccount ! cmd
       bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("inTransaction", 0, 10))
@@ -77,7 +77,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val PreviousAmount = BigDecimal.valueOf(10)
       val TransactionId = "transactionId2"
       val Amount = BigDecimal.valueOf(5)
-      val cmd = Pending(WithdrawFunds(AccountNumber, Amount), TransactionId)
+      val cmd = PendingTransaction(WithdrawFunds(AccountNumber, Amount), TransactionId)
       bankAccount ! cmd
       bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("inTransaction", 0, 10))
@@ -91,7 +91,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
     "ignore attempt to commit not existing transaction with pending deposit" in {
       val FakeTransactionId = "transactionId99"
       val FakeAmount = BigDecimal.valueOf(99)
-      val cmd = Commit(DepositFunds(AccountNumber, FakeAmount), FakeTransactionId)
+      val cmd = CommitTransaction(DepositFunds(AccountNumber, FakeAmount), FakeTransactionId)
       bankAccount ! cmd
       bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("inTransaction", 0, 10))
@@ -103,7 +103,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val PreviousAmount = BigDecimal.valueOf(10)
       val TransactionId = "transactionId2"
       val Amount = BigDecimal.valueOf(5)
-      val cmd = Commit(DepositFunds(AccountNumber, PreviousAmount), PreviousTransactionId)
+      val cmd = CommitTransaction(DepositFunds(AccountNumber, PreviousAmount), PreviousTransactionId)
       bankAccount ! cmd
       bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("inTransaction", 10, 5))
@@ -122,7 +122,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
     "ignore attempt to commit not existing transaction with pending withdrawal" in {
       val FakeTransactionId = "transactionId99"
       val FakeAmount = BigDecimal.valueOf(99)
-      val cmd = Commit(DepositFunds(AccountNumber, FakeAmount), FakeTransactionId)
+      val cmd = CommitTransaction(DepositFunds(AccountNumber, FakeAmount), FakeTransactionId)
       bankAccount ! cmd
       bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("inTransaction", 10, 5))
@@ -131,7 +131,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
     "accept commit of WithdrawFunds and transition back to active state" in {
       val TransactionId = "transactionId2"
       val Amount = BigDecimal.valueOf(5)
-      val cmd = Commit(WithdrawFunds(AccountNumber, Amount), TransactionId)
+      val cmd = CommitTransaction(WithdrawFunds(AccountNumber, Amount), TransactionId)
       bankAccount ! cmd
       bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("active", 5, 0))
@@ -145,7 +145,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
     "accept pending DepositFunds command and then a rollback" in {
       val TransactionId = "transactionId3"
       val Amount = BigDecimal.valueOf(11)
-      val cmd1 = Pending(DepositFunds(AccountNumber, Amount), TransactionId)
+      val cmd1 = PendingTransaction(DepositFunds(AccountNumber, Amount), TransactionId)
       bankAccount ! cmd1
 
       val src1: Source[EventEnvelope, NotUsed] =
@@ -153,7 +153,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val evt1 = Await.result(src1.map(_.event).runWith(Sink.head), timeout.duration)
       evt1 shouldBe(FundsDepositedPending(AccountNumber, TransactionId, Amount))
 
-      val cmd2 = Rollback(DepositFunds(AccountNumber, Amount), TransactionId)
+      val cmd2 = RollbackTransaction(DepositFunds(AccountNumber, Amount), TransactionId)
       bankAccount ! cmd2
       val src2: Source[EventEnvelope, NotUsed] =
         queries.eventsByPersistenceId(AccountNumber, 7L, Long.MaxValue)
@@ -167,7 +167,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
     "accept pending WithdrawFunds command and then a rollback" in {
       val TransactionId = "transactionId4"
       val Amount = BigDecimal.valueOf(1)
-      val cmd1 = Pending(WithdrawFunds(AccountNumber, Amount), TransactionId)
+      val cmd1 = PendingTransaction(WithdrawFunds(AccountNumber, Amount), TransactionId)
       bankAccount ! cmd1
 
       val src1: Source[EventEnvelope, NotUsed] =
@@ -175,7 +175,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       val evt1 = Await.result(src1.map(_.event).runWith(Sink.head), timeout.duration)
       evt1 shouldBe(FundsWithdrawnPending(AccountNumber, TransactionId, Amount))
 
-      val cmd2 = Rollback(WithdrawFunds(AccountNumber, Amount), TransactionId)
+      val cmd2 = RollbackTransaction(WithdrawFunds(AccountNumber, Amount), TransactionId)
       bankAccount ! cmd2
       val src2: Source[EventEnvelope, NotUsed] =
         queries.eventsByPersistenceId(AccountNumber, 9L, Long.MaxValue)

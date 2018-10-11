@@ -1,12 +1,9 @@
 package com.example
 
 import akka.actor.ActorSystem
-import akka.persistence.query.PersistenceQuery
-import akka.persistence.query.journal.leveldb.scaladsl.LeveldbReadJournal
-import akka.stream.ActorMaterializer
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.Timeout
-import com.example.BankAccount.{DepositFunds, Pending}
+import com.example.BankAccount.{DepositFunds, PendingTransaction}
 import com.typesafe.config.ConfigFactory
 import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 
@@ -25,11 +22,8 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
 
     import BankAccountSaga._
 
-    implicit val mat = ActorMaterializer()(system)
-    val queries = PersistenceQuery(system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
-
     val bankAccountRegion = TestProbe()
-    val saga = system.actorOf(BankAccountSaga.props(bankAccountRegion.ref, timeout.duration, queries), "transactionId1")
+    val saga = system.actorOf(BankAccountSaga.props(), "transactionId1")
 
     "properly be started with StartBankAccountSaga command" in {
       val cmds = Seq(
@@ -43,9 +37,9 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
 
       expectMsg(BankAccountSagaState("pending", "transactionId1", cmds))
       bankAccountRegion.expectMsgAllOf(
-        Pending(DepositFunds("accountNumber1", 10), "transactionId1"),
-        Pending(DepositFunds("accountNumber2", 20), "transactionId1"),
-        Pending(DepositFunds("accountNumber3", 30), "transactionId1"))
+        PendingTransaction(DepositFunds("accountNumber1", 10), "transactionId1"),
+        PendingTransaction(DepositFunds("accountNumber2", 20), "transactionId1"),
+        PendingTransaction(DepositFunds("accountNumber3", 30), "transactionId1"))
     }
 
     "accept first 2 commits" in {
@@ -61,9 +55,9 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
 
       expectMsg(BankAccountSagaState("pending", "transactionId1", cmds))
       bankAccountRegion.expectMsgAllOf(
-        Pending(DepositFunds("accountNumber1", 10), "transactionId1"),
-        Pending(DepositFunds("accountNumber2", 20), "transactionId1"),
-        Pending(DepositFunds("accountNumber3", 30), "transactionId1"))
+        PendingTransaction(DepositFunds("accountNumber1", 10), "transactionId1"),
+        PendingTransaction(DepositFunds("accountNumber2", 20), "transactionId1"),
+        PendingTransaction(DepositFunds("accountNumber3", 30), "transactionId1"))
     }
   }
 
