@@ -32,7 +32,7 @@ abstract class BaseApp(implicit val system: ActorSystem) {
 
   val bankAccountSagaRegion: ActorRef = ClusterSharding(system).start(
     typeName = "bank-account-saga",
-    entityProps = BankAccountSaga.props(),
+    entityProps = BankAccountSaga.props(bankAccountRegion),
     settings = ClusterShardingSettings(system),
     extractEntityId = BankAccountSaga.extractEntityId,
     extractShardId = BankAccountSaga.extractShardId

@@ -41,7 +41,10 @@ case object BankAccount {
   }
 
   trait BankAccountTransactionRolledBack extends BankAccountEvent
-  trait BankAccountException extends BankAccountEvent
+
+  trait BankAccountException extends BankAccountEvent {
+    def transactionId: String
+  }
 
   case class BankAccountCreated(customerId: String, accountNumber: String) extends BankAccountEvent
   case class FundsDepositedPending(accountNumber: String, transactionId: String, amount: BigDecimal)
@@ -50,7 +53,7 @@ case object BankAccount {
     extends BankAccountTransactionRolledBack
   case class FundsDeposited(accountNumber: String, transactionId: String, amount: BigDecimal)
     extends BankAccountTransaction
-  case class InsufficientFunds(accountNumber: String, balance: BigDecimal, attemptedWithdrawal: BigDecimal)
+  case class InsufficientFunds(accountNumber: String, transactionId: String, balance: BigDecimal, attemptedWithdrawal: BigDecimal)
     extends BankAccountException
   case class FundsWithdrawnPending(accountNumber: String, transactionId: String, amount: BigDecimal)
     extends BankAccountTransaction
@@ -94,7 +97,6 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
   override def receiveCommand: Receive = default.orElse(stateReporting)
 
   def default: Receive = {
-
     case CreateBankAccount(customerId, accountNumber) =>
       persist(BankAccountCreated(customerId, accountNumber)) { _ =>
         log.info(s"Creating BankAccount with persistenceId $persistenceId")
@@ -109,14 +111,14 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
         transitionToInTransaction(evt.payload.asInstanceOf[BankAccountTransaction])
       }
 
-    case PendingTransaction(WithdrawFunds(_, amount, _), transactionId) =>
+    case PendingTransaction(WithdrawFunds(accountNumber, amount, _), transactionId) =>
       if (state.balance - amount > 0)
         persist(Tagged(FundsWithdrawnPending(persistenceId, transactionId, amount), Set( transactionId))) { evt =>
           state = state.copy(pendingBalance = state.balance - amount)
           transitionToInTransaction(evt.payload.asInstanceOf[BankAccountTransaction])
         }
       else {
-        persist(Tagged(InsufficientFunds(persistenceId, state.balance, amount), Set(transactionId)))
+        persist(Tagged(InsufficientFunds(accountNumber, persistenceId, state.balance, amount), Set(transactionId)))
           { _ =>
             transitionToActive()
           }
