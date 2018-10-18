@@ -4,9 +4,9 @@ version := "0.1.0"
 
 scalaVersion := "2.12.6"
 
-lazy val akkaVersion = "2.5.14"
+lazy val akkaVersion = "2.5.17"
 
-lazy val httpVersion = "10.1.3"
+lazy val httpVersion = "10.1.5"
 
 enablePlugins(SbtReactiveAppPlugin, Cinnamon)
 

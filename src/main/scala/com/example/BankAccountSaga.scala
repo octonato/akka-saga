@@ -1,13 +1,15 @@
 package com.example
 
 import akka.NotUsed
-import akka.actor.{ActorLogging, ActorRef, Props}
+import akka.actor.{ActorLogging, ActorRef, Props, ReceiveTimeout}
 import akka.persistence.{PersistentActor, SnapshotOffer}
 import akka.cluster.sharding.ShardRegion
 import akka.persistence.query.{EventEnvelope, Offset, PersistenceQuery}
 import akka.persistence.query.journal.leveldb.scaladsl.LeveldbReadJournal
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Source
+
+import scala.concurrent.duration._
 
 /**
   * Transaction coordinator companion object.
@@ -26,6 +28,7 @@ object BankAccountSaga {
     val Pending = "pending"
     val Committing = "committing"
     val RollingBack = "rollingBack"
+    val Complete = "complete"
   }
 
   import BankAccountSagaStates._
@@ -34,7 +37,7 @@ object BankAccountSaga {
     case cmd: StartBankAccountSaga => (cmd.transactionId, cmd)
   }
 
-  val BankAccountSagaShardCount = 1 // Todo: get from config
+  val BankAccountSagaShardCount = 2 // Todo: get from config
 
   val extractShardId: ShardRegion.ExtractShardId = {
     case cmd: StartBankAccountSaga => (cmd.transactionId.hashCode % BankAccountSagaShardCount).toString
@@ -73,6 +76,7 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
   override def persistenceId: String = self.path.name
 
   private var state: BankAccountSagaState = BankAccountSagaState(persistenceId)
+  private val completedSagaTimeout: FiniteDuration = 5.minutes
 
   private case class BankAccountTransactionConfirmed(evt: BankAccountEvent)
   private case class BankAccountExceptionConfirmed(evt: BankAccountException)
@@ -82,8 +86,8 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
   val readJournal = PersistenceQuery(context.system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
   val source: Source[EventEnvelope, NotUsed] = readJournal.eventsByTag(persistenceId, Offset.noOffset)
   source.map(_.event).runForeach {
-    case evt: BankAccountTransaction => self ! BankAccountTransactionConfirmed(evt)
-    case ex: BankAccountException    => self ! BankAccountExceptionConfirmed(ex)
+    case evt: BankAccountTransaction           => self ! BankAccountTransactionConfirmed(evt)
+    case ex: BankAccountException              => self ! BankAccountExceptionConfirmed(ex)
   }
 
   override def receiveCommand: Receive = uninitialized.orElse(stateReporting)
@@ -108,6 +112,7 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
       if (!state.pendingConfirmed.contains(evt.accountNumber)) {
         state = state.copy(pendingConfirmed = state.pendingConfirmed :+ evt.accountNumber)
         saveSnapshot(state)
+        pendingTransitionCheck()
       }
 
     case BankAccountExceptionConfirmed(ex) =>
@@ -115,14 +120,19 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
         state = state.copy(exceptions = state.exceptions :+ ex)
         log.error(s"Transaction rolling back due to exception on account ${ex.accountNumber}.")
         saveSnapshot(state)
+        pendingTransitionCheck()
       }
+  }
 
-      // Check if done here
-      if (state.pendingConfirmed.size + state.exceptions.size == state.commands.size)
-        if (state.exceptions.isEmpty)
-          transitionToCommit()
-        else
-          transitionToRollback()
+  /**
+    * Transition from pending to either commit or rollback if possible.
+    */
+  def pendingTransitionCheck(): Unit = {
+    if (state.pendingConfirmed.size + state.exceptions.size == state.commands.size)
+      if (state.exceptions.isEmpty)
+        transitionToCommit()
+      else
+        transitionToRollback()
   }
 
   /**
@@ -139,7 +149,10 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
       // Check if done here
       if (state.commitConfirmed.size == state.commands.size) {
         log.info(s"Bank account saga completed successfully for transactionId: ${state.transactionId}")
-        context.stop(self)
+        state = state.copy(currentState = Complete)
+        saveSnapshot(state)
+        context.setReceiveTimeout(completedSagaTimeout)
+        context.become(stateReporting) // Stick around for a bit for the sake of reporting.
       }
   }
 
@@ -156,7 +169,10 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
       // Check if done here
       if (state.rollbackConfirmed.size == state.commands.size - state.exceptions.size) {
         log.info(s"Bank account saga rolled back successfully for transactionId: ${state.transactionId}")
-        context.stop(self)
+        state = state.copy(currentState = Complete)
+        saveSnapshot(state)
+        context.setReceiveTimeout(completedSagaTimeout)
+        context.become(stateReporting) // Stick around for a bit for the sake of reporting.
       }
   }
 
@@ -169,6 +185,9 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
         case Pending       => context.become(pending.orElse(stateReporting))
         case Committing    => context.become(rollingBack.orElse(stateReporting))
         case RollingBack   => context.become(committing.orElse(stateReporting))
+        case Complete      =>
+          context.setReceiveTimeout(completedSagaTimeout)
+          context.become(stateReporting)
       }
   }
 
@@ -206,8 +225,8 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
     saveSnapshot(state)
     context.become(rollingBack.orElse(stateReporting))
 
-    state.commands.foreach( c =>
-      bankAccountRegion ! RollbackTransaction(c, state.transactionId)
+    state.pendingConfirmed.foreach( c =>
+      bankAccountRegion ! RollbackTransaction(state.commands.find(_.accountNumber == c).get, state.transactionId)
     )
   }
 
@@ -215,7 +234,9 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
     * Report current state for ease of testing.
     */
   def stateReporting: Receive = {
-    case GetBankAccountSagaState =>
-      sender() ! state
+    case GetBankAccountSagaState => sender() ! state
+    case ReceiveTimeout =>
+      // It is possible for this saga to be started just for state reporting, so let's not stay in memory.
+      context.stop(self)
   }
 }

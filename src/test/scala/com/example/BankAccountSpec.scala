@@ -22,8 +22,10 @@ object BankAccountSpec {
       akka.persistence.journal.plugin = "akka.persistence.journal.leveldb"
       akka.persistence.journal.leveldb.dir = "target/shared"
       akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
-      |akka.persistence.snapshot-store.local.dir = "target/snapshots"
+      akka.persistence.snapshot-store.local.dir = "target/snapshots"
       akka.actor.warn-about-java-serializer-usage = "false"
+      log-dead-letters-during-shutdown = off
+ |    log-dead-letters = off
     """
 }
 

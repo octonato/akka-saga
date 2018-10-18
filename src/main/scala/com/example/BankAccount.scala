@@ -19,10 +19,13 @@ case object BankAccount {
     def transactionType: String
   }
 
+  final val DepositFundsTransactionType: String = "DepositFunds"
+  final val WithdrawFundsTransactionType: String = "WithdrawFunds"
+
   case class CreateBankAccount(customerId: String, accountNumber: String) extends BankAccountCommand
-  case class DepositFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = "DepositFunds")
+  case class DepositFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = DepositFundsTransactionType)
     extends BankAccountTransactionalCommand
-  case class WithdrawFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = "WithdrawFunds")
+  case class WithdrawFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = WithdrawFundsTransactionType)
     extends BankAccountTransactionalCommand
   case class GetBankAccount(accountNumber: String) extends BankAccountCommand
   case object GetBankAccountState
@@ -40,8 +43,6 @@ case object BankAccount {
     def amount: BigDecimal
   }
 
-  trait BankAccountTransactionRolledBack extends BankAccountEvent
-
   trait BankAccountException extends BankAccountEvent {
     def transactionId: String
   }
@@ -50,7 +51,7 @@ case object BankAccount {
   case class FundsDepositedPending(accountNumber: String, transactionId: String, amount: BigDecimal)
     extends BankAccountTransaction
   case class FundsDepositedReversal(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransactionRolledBack
+    extends BankAccountTransaction
   case class FundsDeposited(accountNumber: String, transactionId: String, amount: BigDecimal)
     extends BankAccountTransaction
   case class InsufficientFunds(accountNumber: String, transactionId: String, balance: BigDecimal, attemptedWithdrawal: BigDecimal)
@@ -58,7 +59,7 @@ case object BankAccount {
   case class FundsWithdrawnPending(accountNumber: String, transactionId: String, amount: BigDecimal)
     extends BankAccountTransaction
   case class FundsWithdrawnReversal(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransactionRolledBack
+    extends BankAccountTransaction
   case class FundsWithdrawn(accountNumber: String, transactionId: String, amount: BigDecimal)
     extends BankAccountTransaction
 
@@ -112,13 +113,13 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
       }
 
     case PendingTransaction(WithdrawFunds(accountNumber, amount, _), transactionId) =>
-      if (state.balance - amount > 0)
+      if (state.balance - amount >= 0)
         persist(Tagged(FundsWithdrawnPending(persistenceId, transactionId, amount), Set( transactionId))) { evt =>
           state = state.copy(pendingBalance = state.balance - amount)
           transitionToInTransaction(evt.payload.asInstanceOf[BankAccountTransaction])
         }
       else {
-        persist(Tagged(InsufficientFunds(accountNumber, persistenceId, state.balance, amount), Set(transactionId)))
+        persist(Tagged(InsufficientFunds(accountNumber, transactionId, state.balance, amount), Set(transactionId)))
           { _ =>
             transitionToActive()
           }
@@ -127,7 +128,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
 
   def inTransaction(processing: BankAccountTransaction): Receive = {
     case transaction @ CommitTransaction(DepositFunds(_, amount, transactionType), transactionId) =>
-      if (amount == processing.amount && transactionType == "DepositFunds")
+      if (amount == processing.amount && transactionType == DepositFundsTransactionType)
         persist(Tagged(FundsDeposited(persistenceId, transactionId, amount), Set(transactionId))) { _ =>
           state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
           transitionToActive()
@@ -137,7 +138,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
           s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
 
     case transaction @ CommitTransaction(WithdrawFunds(_, amount, transactionType), transactionId) =>
-      if (amount == processing.amount && transactionType == "WithdrawFunds")
+      if (amount == processing.amount && transactionType == WithdrawFundsTransactionType)
         persist(Tagged(FundsWithdrawn(persistenceId, transactionId, amount), Set(transactionId))) { _ =>
           state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
           transitionToActive()
@@ -147,23 +148,21 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
           s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
 
     case transaction @ RollbackTransaction(DepositFunds(_, amount, transactionType), transactionId) =>
-      if (amount == processing.amount && transactionType == "DepositFunds")
-        persist(Tagged(FundsDepositedReversal(persistenceId, transactionId, amount), Set(transactionId)))
-          { _ =>
-            state = state.copy(pendingBalance = 0)
-            transitionToActive()
-          }
+      if (amount == processing.amount && transactionType == DepositFundsTransactionType)
+        persist(Tagged(FundsDepositedReversal(persistenceId, transactionId, amount), Set(transactionId))) { _ =>
+          state = state.copy(pendingBalance = 0)
+          transitionToActive()
+        }
       else
         log.error(s"Attempt to rollback ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
           s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
 
     case transaction @ RollbackTransaction(WithdrawFunds(_, amount, transactionType), transactionId) =>
-      if (amount == processing.amount && transactionType == "WithdrawFunds")
-        persist(Tagged(FundsWithdrawnReversal(persistenceId, transactionId, amount), Set(transactionId)))
-          { _ =>
-            state = state.copy(pendingBalance = 0)
-            transitionToActive()
-          }
+      if (amount == processing.amount && transactionType == WithdrawFundsTransactionType)
+        persist(Tagged(FundsWithdrawnReversal(persistenceId, transactionId, amount), Set(transactionId))) { _ =>
+          state = state.copy(pendingBalance = 0)
+          transitionToActive()
+        }
       else
         log.error(s"Attempt to rollback ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
           s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
