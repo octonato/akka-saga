@@ -30,4 +30,8 @@ fail, the entire batch must fail.
 
 This is completely ready to deploy using our enterprise suite tooling onto Kubernetes Minikube.
 
-Steps ---- TODO
+TODO:
+
+Add retry functionality
+Get tests refactored and working
+Test on ES2.0
