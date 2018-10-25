@@ -3,7 +3,6 @@ package com.example
 import akka.NotUsed
 import akka.actor.{ActorLogging, ActorRef, Props, ReceiveTimeout}
 import akka.persistence.{PersistentActor, SnapshotOffer}
-import akka.cluster.sharding.ShardRegion
 import akka.persistence.query.{EventEnvelope, Offset, PersistenceQuery}
 import akka.persistence.query.journal.leveldb.scaladsl.LeveldbReadJournal
 import akka.stream.ActorMaterializer
@@ -16,11 +15,17 @@ import scala.concurrent.duration._
   */
 object BankAccountSaga {
 
-  import BankAccount._
+  import BankAccountCommands._
+  import BankAccountEvents._
 
   // Commands
   case class StartBankAccountSaga(commands: Seq[BankAccountTransactionalCommand], transactionId: String)
   case object GetBankAccountSagaState
+
+  // Transactional wrappers for bank account commands
+  case class PendingTransaction(command: BankAccountTransactionalCommand, transactionId: String)
+  case class CommitTransaction(command: BankAccountTransactionalCommand, transactionId: String)
+  case class RollbackTransaction(command: BankAccountTransactionalCommand, transactionId: String)
 
   // States
   object BankAccountSagaStates  {
@@ -32,19 +37,6 @@ object BankAccountSaga {
   }
 
   import BankAccountSagaStates._
-
-  val extractEntityId: ShardRegion.ExtractEntityId = {
-    case cmd: StartBankAccountSaga => (cmd.transactionId, cmd)
-  }
-
-  val BankAccountSagaShardCount = 2 // Todo: get from config
-
-  val extractShardId: ShardRegion.ExtractShardId = {
-    case cmd: StartBankAccountSaga => (cmd.transactionId.hashCode % BankAccountSagaShardCount).toString
-    case ShardRegion.StartEntity(id) ⇒
-      // StartEntity is used by remembering entities feature
-      (id.hashCode % BankAccountSagaShardCount).toString
-  }
 
   case class BankAccountSagaState(
     transactionId: String,
@@ -70,7 +62,8 @@ object BankAccountSaga {
 class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with ActorLogging {
 
   import BankAccountSaga._
-  import BankAccount._
+  import BankAccountCommands._
+  import BankAccountEvents._
   import BankAccountSagaStates._
 
   override def persistenceId: String = self.path.name
@@ -86,11 +79,13 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
   val readJournal = PersistenceQuery(context.system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
   val source: Source[EventEnvelope, NotUsed] = readJournal.eventsByTag(persistenceId, Offset.noOffset)
   source.map(_.event).runForeach {
-    case evt: BankAccountTransaction           => self ! BankAccountTransactionConfirmed(evt)
-    case ex: BankAccountException              => self ! BankAccountExceptionConfirmed(ex)
+    case evt: BankAccountTransaction => self ! BankAccountTransactionConfirmed(evt)
+    case ex: BankAccountException => self ! BankAccountExceptionConfirmed(ex)
   }
 
   override def receiveCommand: Receive = uninitialized.orElse(stateReporting)
+
+  //val bankAccountSagaEvent: CinnamonEvent = CinnamonEvents(context).createInfoEvent("bankAccountSagaEvent")
 
   /**
     * In this state we are hobbled until we are sent the start message. Instantiation of this actor has to be in two
@@ -100,7 +95,8 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
     */
   def uninitialized: Receive = {
     case StartBankAccountSaga(commands, transactionId) =>
-      log.info(s"starting new bank account saga with transactionId: $transactionId")
+      val txt = s"starting new bank account saga with transactionId: $transactionId"
+      log.info(txt)
       transitionToPending(commands)
   }
 
@@ -118,7 +114,8 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
     case BankAccountExceptionConfirmed(ex) =>
       if (!state.exceptions.contains()) {
         state = state.copy(exceptions = state.exceptions :+ ex)
-        log.error(s"Transaction rolling back due to exception on account ${ex.accountNumber}.")
+        val txt = s"Transaction rolling back when possible due to exception on account ${ex.accountNumber}."
+        log.error(txt)
         saveSnapshot(state)
         pendingTransitionCheck()
       }
@@ -148,7 +145,9 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
 
       // Check if done here
       if (state.commitConfirmed.size == state.commands.size) {
-        log.info(s"Bank account saga completed successfully for transactionId: ${state.transactionId}")
+        val txt = s"Bank account saga completed successfully for transactionId: ${state.transactionId}"
+        log.info(txt)
+        //bankAccountSagaEvent.fire(s"BankAccountSaga $persistenceId" -> txt)
         state = state.copy(currentState = Complete)
         saveSnapshot(state)
         context.setReceiveTimeout(completedSagaTimeout)
@@ -194,7 +193,7 @@ class BankAccountSaga(bankAccountRegion: ActorRef) extends PersistentActor with 
   /**
     * Change to pending state.
     */
-  private def transitionToPending(commands: Seq[BankAccount.BankAccountTransactionalCommand]): Unit = {
+  private def transitionToPending(commands: Seq[BankAccountTransactionalCommand]): Unit = {
     state = state.copy(currentState = Pending, commands = commands)
     saveSnapshot(state)
     context.become(pending.orElse(stateReporting))

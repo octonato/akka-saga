@@ -19,18 +19,23 @@ object BankAccountSagaSpec {
 
   val Config =
     """
-      akka.persistence.journal.plugin = "akka.persistence.journal.leveldb"
-      akka.persistence.journal.leveldb.dir = "target/leveldb"
-      akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
-      akka.persistence.snapshot-store.local.dir = "target/snapshots"
-      akka.actor.warn-about-java-serializer-usage = "false"
-      log-dead-letters-during-shutdown = off
-      log-dead-letters = off
-    """
+      |akka.persistence.journal.plugin = "akka.persistence.journal.leveldb"
+      |akka.persistence.journal.leveldb.dir = "target/leveldb"
+      |akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
+      |akka.persistence.snapshot-store.local.dir = "target/snapshots"
+      |akka.actor.warn-about-java-serializer-usage = "false"
+      |log-dead-letters-during-shutdown = off
+      |log-dead-letters = off
+    """.stripMargin
 }
 
 class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", ConfigFactory.parseString(BankAccountSagaSpec.Config)))
   with WordSpecLike with Matchers with ImplicitSender with BeforeAndAfterAll {
+
+  import BankAccountCommands._
+  import BankAccountEvents._
+  import BankAccountSaga._
+  import BankAccountSagaStates._
 
   override def afterAll: Unit = {
     TestKit.shutdownActorSystem(system)
@@ -39,10 +44,6 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
   implicit val timeout = Timeout(5 seconds)
 
   "a BankAccountSaga" should {
-
-    import BankAccountSaga._
-    import BankAccount._
-    import BankAccountSagaStates._
 
     var TransactionId: String = "need to set this!"
 

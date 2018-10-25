@@ -1,7 +1,6 @@
 package com.example
 
 import akka.actor.{ActorLogging, Props, Stash}
-import akka.cluster.sharding.ShardRegion
 import akka.persistence.PersistentActor
 import akka.persistence.journal.Tagged
 
@@ -10,74 +9,19 @@ import akka.persistence.journal.Tagged
   */
 case object BankAccount {
 
-  trait BankAccountCommand {
-    def accountNumber: String
-  }
-
-  trait BankAccountTransactionalCommand extends BankAccountCommand {
-    def amount: BigDecimal
-    def transactionType: String
-  }
-
   final val DepositFundsTransactionType: String = "DepositFunds"
   final val WithdrawFundsTransactionType: String = "WithdrawFunds"
 
-  case class CreateBankAccount(customerId: String, accountNumber: String) extends BankAccountCommand
-  case class DepositFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = DepositFundsTransactionType)
-    extends BankAccountTransactionalCommand
-  case class WithdrawFunds(accountNumber: String, amount: BigDecimal, final val transactionType: String = WithdrawFundsTransactionType)
-    extends BankAccountTransactionalCommand
-  case class GetBankAccount(accountNumber: String) extends BankAccountCommand
-  case object GetBankAccountState
-
-  case class PendingTransaction(command: BankAccountTransactionalCommand, transactionId: String)
-  case class CommitTransaction(command: BankAccountTransactionalCommand, transactionId: String)
-  case class RollbackTransaction(command: BankAccountTransactionalCommand, transactionId: String)
-
-  trait BankAccountEvent {
-    def accountNumber: String
+  // States
+  object BankAccountStates  {
+    val Uninitialized = "uninitialized"
+    val Active = "active"
+    val InTransaction = "inTransaction"
   }
 
-  trait BankAccountTransaction extends BankAccountEvent {
-    def transactionId: String
-    def amount: BigDecimal
-  }
-
-  trait BankAccountException extends BankAccountEvent {
-    def transactionId: String
-  }
-
-  case class BankAccountCreated(customerId: String, accountNumber: String) extends BankAccountEvent
-  case class FundsDepositedPending(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-  case class FundsDepositedReversal(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-  case class FundsDeposited(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-  case class InsufficientFunds(accountNumber: String, transactionId: String, balance: BigDecimal, attemptedWithdrawal: BigDecimal)
-    extends BankAccountException
-  case class FundsWithdrawnPending(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-  case class FundsWithdrawnReversal(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-  case class FundsWithdrawn(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-
-  val extractEntityId: ShardRegion.ExtractEntityId = {
-    case cmd: BankAccountCommand => (cmd.accountNumber, cmd)
-  }
-
-  val BankAccountShardCount = 2 // TODO: get from config
-
-  val extractShardId: ShardRegion.ExtractShardId = {
-    case cmd: BankAccountCommand => (cmd.accountNumber.hashCode % BankAccountShardCount).toString
-    case ShardRegion.StartEntity(id) ⇒
-      // StartEntity is used by remembering entities feature
-      (id.hashCode % BankAccountShardCount).toString
-  }
-
+  import BankAccountStates._
   case class BankAccountState(
-    currentState: String = "uninitialized",
+    currentState: String = Uninitialized,
     balance: BigDecimal = 0,
     pendingBalance: BigDecimal = 0)
 
@@ -90,6 +34,10 @@ case object BankAccount {
 class BankAccount extends PersistentActor with ActorLogging with Stash {
 
   import BankAccount._
+  import BankAccountStates._
+  import BankAccountCommands._
+  import BankAccountEvents._
+  import BankAccountSaga._
 
   override def persistenceId: String = self.path.name
 
@@ -120,7 +68,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
         }
       else {
         persist(Tagged(InsufficientFunds(accountNumber, transactionId, state.balance, amount), Set(transactionId)))
-          { _ =>
+          { e =>
             transitionToActive()
           }
       }
@@ -173,24 +121,24 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
     */
   def stateReporting: Receive = {
     case GetBankAccountState => sender() ! state
-    case _ => stash()
   }
 
   /**
-    * Change to this state (context.become) while changing currentState value.
+    * Transition to active state, ready to process any stashed messages, if any.
     */
   private def transitionToActive(): Unit = {
-    state = state.copy(currentState = "active")
+    state = state.copy(currentState = Active)
     context.become(active.orElse(stateReporting))
     unstashAll()
   }
 
   /**
-    * Change to this state (context.become) while changing currentState value.
+    * Transition to this in transaction state. When in a transaction we stash incoming messages that are not
+    * part of the current transaction in process.
     */
   private def transitionToInTransaction(processing: BankAccountTransaction): Unit = {
-    state = state.copy(currentState = "inTransaction")
-    context.become(inTransaction(processing).orElse(stateReporting))
+    state = state.copy(currentState = InTransaction)
+    context.become(inTransaction(processing).orElse(stateReporting).orElse { case _ => stash })
   }
 
   override def receiveRecover: Receive = {

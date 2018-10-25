@@ -6,13 +6,14 @@ import akka.actor.{Actor, ActorRef, Props}
 import akka.http.scaladsl.model.StatusCodes
 import akka.testkit.{TestKit, TestProbe}
 import akka.util.Timeout
-import com.example.BankAccount.{CreateBankAccount, WithdrawFunds}
 import com.example.BankAccountSaga.StartBankAccountSaga
 
 import scala.concurrent.duration._
 
 class BankAccountRoutesSpec extends WordSpecLike
   with Matchers with ScalatestRouteTest with BankAccountRoutes with BeforeAndAfterAll{
+
+  import BankAccountCommands._
 
   override implicit val timeout: Timeout = 5.seconds
   override val clusterListener: ActorRef = null // not testing this

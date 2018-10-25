@@ -8,7 +8,13 @@ lazy val akkaVersion = "2.5.17"
 
 lazy val httpVersion = "10.1.5"
 
-enablePlugins(SbtReactiveAppPlugin, Cinnamon)
+//enablePlugins(SbtReactiveAppPlugin, Cinnamon)
+
+//import com.typesafe.sbt.SbtMultiJvm.multiJvmSettings
+
+lazy val root = (project in file("."))
+  .enablePlugins(MultiJvmPlugin)
+  .configs(MultiJvm)
 
 scalacOptions := Seq("-Ywarn-unused", "-Ywarn-dead-code", "-Ywarn-unused-import")
 
@@ -22,32 +28,33 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka"         %% "akka-persistence-query"    % akkaVersion,
   "com.typesafe.akka"         %% "akka-testkit"              % akkaVersion  % "test",
   "com.typesafe.akka"         %% "akka-http-testkit"         % httpVersion  % "test",
+  "com.typesafe.akka"         %% "akka-multi-node-testkit"   % akkaVersion  % "test",
   "org.iq80.leveldb"           % "leveldb"                   % "0.10"       % "test",
   "org.fusesource.leveldbjni"  % "leveldbjni-all"            % "1.8"        % "test",
   "org.scalatest"             %% "scalatest"                 % "3.0.5"      % "test"
 )
 
-// Add Cinnamon library dependencies.
-libraryDependencies ++= Vector(
-  Cinnamon.library.cinnamonCHMetrics,
-  Cinnamon.library.cinnamonAkka,
-  Cinnamon.library.cinnamonAkkaHttp,
-  Cinnamon.library.cinnamonJvmMetricsProducer,
-  Cinnamon.library.cinnamonPrometheus,
-  Cinnamon.library.cinnamonPrometheusHttpServer
-)
+//// Add Cinnamon library dependencies.
+//libraryDependencies ++= Vector(
+//  Cinnamon.library.cinnamonCHMetrics,
+//  Cinnamon.library.cinnamonAkka,
+//  Cinnamon.library.cinnamonAkkaHttp,
+//  Cinnamon.library.cinnamonJvmMetricsProducer,
+//  Cinnamon.library.cinnamonPrometheus,
+//  Cinnamon.library.cinnamonPrometheusHttpServer
+//)
 
 mainClass in Compile := Some("com.example.AkkaSagaApp")
 
-enableAkkaClusterBootstrap := true
+//enableAkkaClusterBootstrap := true
 
-endpoints += TcpEndpoint("cinnamon", 9091, None)
-endpoints += HttpEndpoint("http", 8080, HttpIngress(Seq(80), Seq("akka-saga.io"), Seq("/")))
+//endpoints += TcpEndpoint("cinnamon", 9001, None)
+//endpoints += HttpEndpoint("http", 8080, HttpIngress(Seq(80), Seq("akka-saga.io"), Seq("/")))
 
-annotations := Map(
-  // enable scraping
-  "prometheus.io/scrape" -> "true",
-  "prometheus.io/port" -> "9091"
-)
+//annotations := Map(
+//  // enable scraping
+//  "prometheus.io/scrape" -> "true",
+//  "prometheus.io/port" -> "9091"
+//)
 
 fork := true

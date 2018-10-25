@@ -11,10 +11,10 @@ import akka.http.scaladsl.server.Route
 import akka.http.scaladsl.server.Directives._
 import akka.stream.ActorMaterializer
 import akka.util.Timeout
-import com.example.BankAccount._
 import com.example.BankAccountSaga.{StartBankAccountSaga}
 import com.example.SimpleClusterListener.MemberList
 import spray.json._
+import BankAccountCommands._
 
 /**
   * Json support for BankAccountHttpRoutes.
