@@ -1,40 +1,33 @@
 package com.example
 
+import com.example.PersistentSagaActor.{TransactionalEvent, TransactionalExceptionEvent}
+
 object BankAccountEvents {
 
-  case class BankAccountCreated(customerId: String, accountNumber: String) extends BankAccountEvent
+  case class BankAccountCreated(customerId: String, accountNumber: AccountNumber) extends BankAccountEvent
 
-  case class FundsDepositedPending(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
+  case class FundsDeposited(accountNumber: AccountNumber, amount: BigDecimal) extends BankAccountTransactionalEvent {
 
-  case class FundsDepositedReversal(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-
-  case class FundsDeposited(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-
-  case class InsufficientFunds(accountNumber: String, transactionId: String, balance: BigDecimal, attemptedWithdrawal: BigDecimal)
-    extends BankAccountException
-
-  case class FundsWithdrawnPending(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-
-  case class FundsWithdrawnReversal(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-
-  case class FundsWithdrawn(accountNumber: String, transactionId: String, amount: BigDecimal)
-    extends BankAccountTransaction
-
-  trait BankAccountEvent {
-    def accountNumber: String
+    override val entityId: EntityId = accountNumber
   }
 
-  trait BankAccountTransaction extends BankAccountEvent {
-    def transactionId: String
+  case class FundsWithdrawn(accountNumber: AccountNumber, amount: BigDecimal) extends BankAccountTransactionalEvent {
+
+    override val entityId: EntityId = accountNumber
+  }
+
+  case class InsufficientFunds(accountNumber: AccountNumber, balance: BigDecimal, attemptedWithdrawal: BigDecimal)
+    extends BankAccountTransactionalExceptionEvent {
+
+    override val entityId: EntityId = accountNumber
+  }
+
+  trait BankAccountEvent {
+    def accountNumber: AccountNumber
+  }
+  trait BankAccountTransactionalEvent extends BankAccountEvent with TransactionalEvent {
     def amount: BigDecimal
   }
 
-  trait BankAccountException extends BankAccountEvent {
-    def transactionId: String
-  }
+  trait BankAccountTransactionalExceptionEvent extends BankAccountEvent with TransactionalExceptionEvent
 }

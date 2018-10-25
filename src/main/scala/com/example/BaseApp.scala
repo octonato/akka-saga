@@ -3,7 +3,7 @@ package com.example
 import akka.actor.{ActorRef, ActorSystem, Props}
 import akka.cluster.sharding.{ClusterSharding, ClusterShardingSettings, ShardRegion}
 import akka.util.Timeout
-import com.example.BankAccountSaga.StartBankAccountSaga
+import com.example.PersistentSagaActor.StartSaga
 
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -43,21 +43,21 @@ abstract class BaseApp(implicit val system: ActorSystem) {
     extractShardId = bankAccountShardIdExtractor
   )
 
-  // Set up bank account saga cluster sharding
-  val bankAccountSagaEntityIdExtractor: ShardRegion.ExtractEntityId = {
-    case cmd: StartBankAccountSaga => (cmd.transactionId, cmd)
+  // Set up saga cluster sharding
+  val sagaEntityIdExtractor: ShardRegion.ExtractEntityId = {
+    case cmd: StartSaga => (cmd.transactionId, cmd)
   }
-  val bankAccountSagaShardCount: Int = system.settings.config.getInt("akka-saga.bank-account-saga.shard-count")
-  val bankAccountSagaShardIdExtractor: ShardRegion.ExtractShardId = {
-    case cmd: StartBankAccountSaga => (cmd.transactionId.hashCode % bankAccountSagaShardCount).toString
+  val sagaShardCount: Int = system.settings.config.getInt("akka-saga.saga.shard-count")
+  val sagaShardIdExtractor: ShardRegion.ExtractShardId = {
+    case cmd: StartSaga => (cmd.transactionId.hashCode % sagaShardCount).toString
     case ShardRegion.StartEntity(id) ⇒
-      (id.hashCode % bankAccountSagaShardCount).toString
+      (id.hashCode % sagaShardCount).toString
   }
   val bankAccountSagaRegion: ActorRef = ClusterSharding(system).start(
     typeName = "bank-account-saga",
-    entityProps = BankAccountSaga.props(bankAccountRegion),
+    entityProps = PersistentSagaActor.props(bankAccountRegion),
     settings = ClusterShardingSettings(system),
-    extractEntityId = bankAccountSagaEntityIdExtractor,
+    extractEntityId = sagaEntityIdExtractor,
     extractShardId = bankAccountShardIdExtractor
   )
 

@@ -37,7 +37,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
   import BankAccountStates._
   import BankAccountCommands._
   import BankAccountEvents._
-  import BankAccountSaga._
+  import PersistentSagaActor._
 
   override def persistenceId: String = self.path.name
 
@@ -54,66 +54,42 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
   }
 
   def active: Receive = {
-    case PendingTransaction(DepositFunds(_, amount, _), transactionId)  =>
-      persist(Tagged(FundsDepositedPending(persistenceId, transactionId, amount), Set(transactionId))) { evt =>
-        state = state.copy(pendingBalance = state.balance + amount)
-        transitionToInTransaction(evt.payload.asInstanceOf[BankAccountTransaction])
-      }
-
-    case PendingTransaction(WithdrawFunds(accountNumber, amount, _), transactionId) =>
-      if (state.balance - amount >= 0)
-        persist(Tagged(FundsWithdrawnPending(persistenceId, transactionId, amount), Set( transactionId))) { evt =>
-          state = state.copy(pendingBalance = state.balance - amount)
-          transitionToInTransaction(evt.payload.asInstanceOf[BankAccountTransaction])
-        }
-      else {
-        persist(Tagged(InsufficientFunds(accountNumber, transactionId, state.balance, amount), Set(transactionId)))
-          { e =>
-            transitionToActive()
+    case StartTransaction(transactionId, cmd)  =>
+      cmd match {
+        case DepositFunds(accountNumber, amount, _) =>
+          persist(Tagged(TransactionStarted(transactionId, FundsDeposited(accountNumber, amount)),
+            Set(transactionId))) { evt =>
+              state = state.copy(pendingBalance = state.balance + amount)
+              transitionToInTransaction(evt.payload.asInstanceOf[TransactionalEventEnvelope])
+          }
+        case WithdrawFunds(accountNumber, amount, _) =>
+          if (state.balance - amount >= 0)
+            persist(Tagged(TransactionStarted(transactionId, FundsWithdrawn(accountNumber, amount)),
+              Set( transactionId))) { evt =>
+              state = state.copy(pendingBalance = state.balance - amount)
+              transitionToInTransaction(evt.payload.asInstanceOf[TransactionalEventEnvelope])
+            }
+          else {
+            persist(Tagged(InsufficientFunds(accountNumber, state.balance, amount), Set(transactionId)))
+            { _ =>
+              transitionToActive()
+            }
           }
       }
   }
 
-  def inTransaction(processing: BankAccountTransaction): Receive = {
-    case transaction @ CommitTransaction(DepositFunds(_, amount, transactionType), transactionId) =>
-      if (amount == processing.amount && transactionType == DepositFundsTransactionType)
-        persist(Tagged(FundsDeposited(persistenceId, transactionId, amount), Set(transactionId))) { _ =>
-          state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
-          transitionToActive()
-        }
-      else
-        log.error(s"Attempt to commit ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
-          s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
+  def inTransaction(processing: TransactionalEvent): Receive = {
+    case CommitTransaction(transactionId, _) =>
+      persist(Tagged(TransactionCleared(transactionId, processing), Set(transactionId))) { _ =>
+        state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
+        transitionToActive()
+      }
 
-    case transaction @ CommitTransaction(WithdrawFunds(_, amount, transactionType), transactionId) =>
-      if (amount == processing.amount && transactionType == WithdrawFundsTransactionType)
-        persist(Tagged(FundsWithdrawn(persistenceId, transactionId, amount), Set(transactionId))) { _ =>
-          state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
-          transitionToActive()
-        }
-      else
-        log.error(s"Attempt to commit ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
-          s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
-
-    case transaction @ RollbackTransaction(DepositFunds(_, amount, transactionType), transactionId) =>
-      if (amount == processing.amount && transactionType == DepositFundsTransactionType)
-        persist(Tagged(FundsDepositedReversal(persistenceId, transactionId, amount), Set(transactionId))) { _ =>
-          state = state.copy(pendingBalance = 0)
-          transitionToActive()
-        }
-      else
-        log.error(s"Attempt to rollback ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
-          s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
-
-    case transaction @ RollbackTransaction(WithdrawFunds(_, amount, transactionType), transactionId) =>
-      if (amount == processing.amount && transactionType == WithdrawFundsTransactionType)
-        persist(Tagged(FundsWithdrawnReversal(persistenceId, transactionId, amount), Set(transactionId))) { _ =>
-          state = state.copy(pendingBalance = 0)
-          transitionToActive()
-        }
-      else
-        log.error(s"Attempt to rollback ${transaction.command.getClass.getSimpleName}($persistenceId, $amount) " +
-          s" with ${processing.getClass.getSimpleName}($persistenceId, ${processing.amount}) outstanding.")
+    case RollbackTransaction(transactionId, _) =>
+      persist(Tagged(TransactionReversed(transactionId, processing), Set(transactionId))) { _ =>
+        state = state.copy(pendingBalance = 0)
+        transitionToActive()
+      }
   }
 
   /**
@@ -136,37 +112,33 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
     * Transition to this in transaction state. When in a transaction we stash incoming messages that are not
     * part of the current transaction in process.
     */
-  private def transitionToInTransaction(processing: BankAccountTransaction): Unit = {
+  private def transitionToInTransaction(processing: TransactionalEventEnvelope): Unit = {
     state = state.copy(currentState = InTransaction)
-    context.become(inTransaction(processing).orElse(stateReporting).orElse { case _ => stash })
+    context.become(inTransaction(processing.event).orElse(stateReporting).orElse { case _ => stash })
   }
 
   override def receiveRecover: Receive = {
     case _: BankAccountCreated =>
       transitionToActive()
 
-    case evt @ FundsDepositedPending(_, _, amount) =>
-      transitionToInTransaction(evt)
-      state = state.copy(pendingBalance = state.balance + amount)
+    case started @ TransactionStarted(_, evt) =>
+      transitionToInTransaction(started)
+      val amount = evt.asInstanceOf[BankAccountTransactionalEvent].amount
 
-    case _: FundsDeposited =>
-      transitionToActive()
+      evt match {
+        case _: FundsDeposited =>
+          state = state.copy(pendingBalance = state.balance + amount)
+        case _: FundsWithdrawn =>
+          state = state.copy(pendingBalance = state.balance - amount)
+      }
+
+    case cleared :TransactionCleared =>
+      transitionToInTransaction(cleared)
       state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
 
-    case _: FundsDepositedReversal =>
-      transitionToActive()
+    case _: TransactionReversed =>
       state = state.copy(pendingBalance = 0)
-
-    case evt @ FundsWithdrawnPending(_, _, amount) =>
-      transitionToInTransaction(evt)
-      state = state.copy(pendingBalance = state.balance - amount)
-
-    case _: FundsWithdrawn =>
       transitionToActive()
-      state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
 
-    case _: FundsWithdrawnReversal =>
-      transitionToActive()
-      state = state.copy(pendingBalance = 0)
   }
 }

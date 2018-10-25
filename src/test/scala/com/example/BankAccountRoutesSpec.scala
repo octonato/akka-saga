@@ -6,7 +6,7 @@ import akka.actor.{Actor, ActorRef, Props}
 import akka.http.scaladsl.model.StatusCodes
 import akka.testkit.{TestKit, TestProbe}
 import akka.util.Timeout
-import com.example.BankAccountSaga.StartBankAccountSaga
+import com.example.PersistentSagaActor.StartSaga
 
 import scala.concurrent.duration._
 
@@ -39,7 +39,7 @@ class BankAccountRoutesSpec extends WordSpecLike
   val bankAccountSagaRegionProbe: TestProbe = TestProbe()
   override val bankAccountSagaRegion = system.actorOf(Props(new Actor {
     override def receive: Receive = {
-      case cmd: StartBankAccountSaga =>  bankAccountSagaRegionProbe.ref ! cmd
+      case cmd: StartSaga =>  bankAccountSagaRegionProbe.ref ! cmd
     }
   }))
 
@@ -48,7 +48,7 @@ class BankAccountRoutesSpec extends WordSpecLike
 
       IdToReturn = "transactionId1"
 
-      val Command = StartTransaction(
+      val Command = StartBankAccountTransaction(
         Seq(
           WithdrawFunds("theAccountNumber", BigDecimal.valueOf(1000l))
         )
@@ -58,7 +58,7 @@ class BankAccountRoutesSpec extends WordSpecLike
         response.status should be(StatusCodes.Accepted)
       }
 
-      bankAccountSagaRegionProbe.expectMsg(StartBankAccountSaga(Command.commands, transactionIdGenerator.generateId))
+      bankAccountSagaRegionProbe.expectMsg(StartSaga(transactionIdGenerator.generateId, Command.commands))
     }
 
     "return accepted with a post of the CreateBankAccount command and send the command to the account region" in {
