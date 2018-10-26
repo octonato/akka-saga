@@ -17,4 +17,3 @@ target/
 .settings
 sbt*
 .DS_Store
-project
