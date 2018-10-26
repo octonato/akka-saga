@@ -14,30 +14,30 @@ import BankAccountCommands._
 import PersistentSagaActor._
 
 /**
+  * A wrapper to start a saga containing bank account transactional commands.
+  */
+case class StartBankAccountTransaction(deposits: Seq[DepositFundsDto], withdrawals: Seq[WithdrawFundsDto])
+
+/**
+  * A DTO for WithdrawFunds.
+  */
+case class DepositFundsDto(accountNumber: AccountNumber, amount: BigDecimal)
+
+/**
+  * A DTO for WithdrawFunds.
+  */
+case class WithdrawFundsDto(accountNumber: AccountNumber, amount: BigDecimal)
+
+/**
   * Json support for BankAccountHttpRoutes.
   */
 trait BankAccountJsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
 
   implicit val createBankAccountFormat = jsonFormat2(CreateBankAccount)
-  implicit val withdrawFundsFormat = jsonFormat3(WithdrawFunds)
-  implicit val depositFundsFormat = jsonFormat3(DepositFunds)
+  implicit val depositFundsFormat = jsonFormat2(DepositFundsDto)
+  implicit val withdrawFundsFormat = jsonFormat2(WithdrawFundsDto)
 
-  implicit val bankAccountTransactionalCommandFormat = new JsonFormat[BankAccountTransactionalCommand] {
-    override def write(obj: BankAccountTransactionalCommand): JsValue = obj match {
-        case w: WithdrawFunds => JsObject("accountNumber" -> w.accountNumber.toJson, "amount" -> w.amount.toJson,
-          "transactionType" -> w.transactionType.toJson)
-        case d: DepositFunds  => JsObject("accountNumber" -> d.accountNumber.toJson, "amount" -> d.amount.toJson,
-          "transactionType" -> d.transactionType.toJson)
-      }
-
-    override def read(json: JsValue): BankAccountTransactionalCommand = json.asJsObject.fields.get("transactionType") match {
-        case Some(JsString("WithdrawFunds")) => json.asJsObject.convertTo[WithdrawFunds]
-        case Some(JsString("DepositFunds")) => json.asJsObject.convertTo[DepositFunds]
-        case _ => throw new RuntimeException(s"Invalid json format: $json")
-      }
-  }
-
-  implicit val startTransactionFormat = jsonFormat1(StartBankAccountTransaction)
+  implicit val startBankAccountTransactionFormat = jsonFormat2(StartBankAccountTransaction)
 }
 
 /**
@@ -55,8 +55,6 @@ class TransactionIdGeneratorImpl extends TransactionIdGenerator {
   override def generateId: String = UUID.randomUUID().toString
 }
 
-case class StartBankAccountTransaction(commands: Seq[BankAccountTransactionalCommand])
-
 /**
   * Http routes for bank account.
   */
@@ -73,8 +71,8 @@ trait BankAccountRoutes extends BankAccountJsonSupport {
   val route: Route =
     path("bank-accounts") {
       post {
-        entity(as[StartBankAccountTransaction]) { cmd =>
-          val start = StartSaga(transactionIdGenerator.generateId, cmd.commands)
+        entity(as[StartBankAccountTransaction]) { dto =>
+          val start = StartSaga(transactionIdGenerator.generateId, dtoToDomain((dto)))
           bankAccountSagaRegion ! start
           complete(StatusCodes.Accepted, s"Transaction accepted with id: ${start.transactionId}")
         }
@@ -86,4 +84,15 @@ trait BankAccountRoutes extends BankAccountJsonSupport {
         }
       }
     }
+
+  /**
+    * Convert dto commands to list of domain commands.
+    */
+  private def dtoToDomain(dto: StartBankAccountTransaction): Seq[BankAccountTransactionalCommand] =
+    (dto.deposits ++ dto.withdrawals).map ( c =>
+      c match {
+        case d: DepositFundsDto => DepositFunds(d.accountNumber, d.amount)
+        case w: WithdrawFundsDto => WithdrawFunds(w.accountNumber, w.amount)
+      }
+  )
 }

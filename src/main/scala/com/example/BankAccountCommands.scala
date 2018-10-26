@@ -8,10 +8,16 @@ object BankAccountCommands {
   case class CreateBankAccount(customerId: String, accountNumber: AccountNumber) extends BankAccountCommand
 
   case class DepositFunds(accountNumber: AccountNumber, amount: BigDecimal,
-    final val transactionType: String = DepositFundsTransactionType) extends BankAccountTransactionalCommand
+    final val transactionType: String = DepositFundsTransactionType)
+    extends BankAccountTransactionalCommand {
+    override val entityId: EntityId = accountNumber
+  }
 
   case class WithdrawFunds(accountNumber: AccountNumber, amount: BigDecimal,
-    final val transactionType: String = WithdrawFundsTransactionType) extends BankAccountTransactionalCommand
+    final val transactionType: String = WithdrawFundsTransactionType)
+    extends BankAccountTransactionalCommand {
+    override val entityId: EntityId = accountNumber
+  }
 
   case class GetBankAccount(accountNumber: AccountNumber) extends BankAccountCommand
 
@@ -21,9 +27,8 @@ object BankAccountCommands {
     def accountNumber: String
   }
 
-  trait BankAccountTransactionalCommand extends TransactionalCommand with BankAccountCommand {
+  trait BankAccountTransactionalCommand extends BankAccountCommand with TransactionalCommand {
     def amount: BigDecimal
     def transactionType: String
-    override val entityId: EntityId = accountNumber
   }
 }
