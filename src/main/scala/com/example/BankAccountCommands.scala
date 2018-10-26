@@ -1,20 +1,17 @@
 package com.example
 
-import com.example.BankAccount.{DepositFundsTransactionType, WithdrawFundsTransactionType}
 import com.example.PersistentSagaActor.TransactionalCommand
 
 object BankAccountCommands {
 
   case class CreateBankAccount(customerId: String, accountNumber: AccountNumber) extends BankAccountCommand
 
-  case class DepositFunds(accountNumber: AccountNumber, amount: BigDecimal,
-    final val transactionType: String = DepositFundsTransactionType)
+  case class DepositFunds(accountNumber: AccountNumber, amount: BigDecimal)
     extends BankAccountTransactionalCommand {
     override val entityId: EntityId = accountNumber
   }
 
-  case class WithdrawFunds(accountNumber: AccountNumber, amount: BigDecimal,
-    final val transactionType: String = WithdrawFundsTransactionType)
+  case class WithdrawFunds(accountNumber: AccountNumber, amount: BigDecimal)
     extends BankAccountTransactionalCommand {
     override val entityId: EntityId = accountNumber
   }
@@ -29,6 +26,5 @@ object BankAccountCommands {
 
   trait BankAccountTransactionalCommand extends BankAccountCommand with TransactionalCommand {
     def amount: BigDecimal
-    def transactionType: String
   }
 }

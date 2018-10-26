@@ -8,6 +8,7 @@ import akka.persistence.query.{EventEnvelope, Offset, PersistenceQuery}
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Source
 
+import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 
 /**
@@ -93,19 +94,31 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
   import PersistentSagaActor._
   import SagaStates._
 
+  implicit def ec: ExecutionContext = context.system.dispatcher
+
   override def persistenceId: String = self.path.name
   val transactionId = persistenceId
 
   /**
     * How long to stick around for reporting purposes after completion.
     */
-  private val completedSagaTimeout: FiniteDuration = 5.minutes
+  private val keepAliveAfterCompletion: FiniteDuration =
+    Duration.fromNanos(context.system.settings.config
+      .getDuration("akka-saga.bank-account.saga.keepAliveAfterCompletion").toNanos())
+
+  /**
+    * How often to retry transactions on an entity when no confirmation received.
+    */
+  private val retryAfter: FiniteDuration =
+    Duration.fromNanos(context.system.settings.config
+      .getDuration("akka-saga.bank-account.saga.retryAfter").toNanos())
+
+  private case object Retry
 
   /**
     * Current state of the saga.
     */
   private var state: SagaState = SagaState(persistenceId)
-
 
   // Subscribe to event log for all events for this transaction and call self back with confirmed event.
   private case class TransactionalEventConfirmed(evt: TransactionalEvent)
@@ -131,6 +144,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
       state = state.copy(currentState = Pending, commands = commands)
       saveSnapshot(state)
       context.become(pending.orElse(stateReporting))
+      context.system.scheduler.scheduleOnce(retryAfter, self, Retry)
 
       commands.foreach { cmd =>
         persistentEntityRegion ! StartTransaction(state.transactionId, cmd)
@@ -159,6 +173,10 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
             pendingTransitionCheck()
           }
       }
+
+    case Retry =>
+      state.commands.diff(state.pendingConfirmed).foreach( c => persistentEntityRegion ! c)
+      context.system.scheduler.scheduleOnce(retryAfter, self, Retry)
   }
 
   /**
@@ -177,9 +195,13 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
         log.info(s"Bank account saga completed successfully for transactionId: ${state.transactionId}")
         state = state.copy(currentState = Complete)
         saveSnapshot(state)
-        context.setReceiveTimeout(completedSagaTimeout)
+        context.setReceiveTimeout(keepAliveAfterCompletion)
         context.become(stateReporting) // Stick around for a bit for the sake of reporting.
       }
+
+    case Retry =>
+      state.commands.diff(state.pendingConfirmed).foreach( c => persistentEntityRegion ! c)
+      context.system.scheduler.scheduleOnce(retryAfter, self, Retry)
   }
 
   /**
@@ -198,23 +220,27 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
         log.info(s"Bank account saga rolled back successfully for transactionId: ${state.transactionId}")
         state = state.copy(currentState = Complete)
         saveSnapshot(state)
-        context.setReceiveTimeout(completedSagaTimeout)
+        context.setReceiveTimeout(keepAliveAfterCompletion)
         context.become(stateReporting) // Stick around for a bit for the sake of reporting.
       }
+
+    case Retry =>
+      state.commands.diff(state.pendingConfirmed).foreach( c => persistentEntityRegion ! c)
+      context.system.scheduler.scheduleOnce(retryAfter, self, Retry)
   }
 
   /**
     * Transition from pending to either commit or rollback if possible.
     */
   private def pendingTransitionCheck(): Unit = {
-    if (state.pendingConfirmed.size + state.exceptions.size == state.commands.size)
+    if (state.pendingConfirmed.size + state.exceptions.size == state.commands.size) {
       if (state.exceptions.isEmpty) {
         // Transition to commit.
         state = state.copy(currentState = Committing)
         saveSnapshot(state)
         context.become(committing.orElse(stateReporting))
 
-        state.commands.foreach( c =>
+        state.commands.foreach(c =>
           persistentEntityRegion ! CommitTransaction(c.entityId, state.transactionId)
         )
       }
@@ -224,10 +250,13 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
         saveSnapshot(state)
         context.become(rollingBack.orElse(stateReporting))
 
-        state.pendingConfirmed.foreach( p =>
+        state.pendingConfirmed.foreach(p =>
           persistentEntityRegion ! RollbackTransaction(transactionId, p)
         )
       }
+
+      context.system.scheduler.scheduleOnce(retryAfter, self, Retry)
+    }
   }
 
   /**
@@ -250,7 +279,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
         case Committing    => context.become(rollingBack.orElse(stateReporting))
         case RollingBack   => context.become(committing.orElse(stateReporting))
         case Complete      =>
-          context.setReceiveTimeout(completedSagaTimeout)
+          context.setReceiveTimeout(keepAliveAfterCompletion)
           context.become(stateReporting)
       }
   }

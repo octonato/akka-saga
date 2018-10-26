@@ -9,22 +9,29 @@ import akka.persistence.journal.Tagged
   */
 case object BankAccount {
 
-  final val DepositFundsTransactionType: String = "DepositFunds"
-  final val WithdrawFundsTransactionType: String = "WithdrawFunds"
-
-  // States
+  // States of a bank account.
   object BankAccountStates  {
     val Uninitialized = "uninitialized"
     val Active = "active"
     val InTransaction = "inTransaction"
   }
 
-  import BankAccountStates._
+  /**
+    * The state of a bank account in time. This may be made private, but for convenience in testing I left it
+    * sharable via asking the actor.
+    * @param currentState the current transactional state.
+    * @param balance the actual balance of the bank account.
+    * @param pendingBalance the balance that reflects any pending transaction.
+    */
   case class BankAccountState(
-    currentState: String = Uninitialized,
+    currentState: String =  BankAccountStates.Uninitialized,
     balance: BigDecimal = 0,
     pendingBalance: BigDecimal = 0)
 
+  /**
+    * Factory method for BankAccount actor.
+    * @return Props
+    */
   def props(): Props = Props(classOf[BankAccount])
 }
 
@@ -45,6 +52,10 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
 
   override def receiveCommand: Receive = default.orElse(stateReporting)
 
+  /**
+    * Here though the actor is instantiated, it is awaiting its first domain creation command to make it an
+    * actual bank account.
+    */
   def default: Receive = {
     case CreateBankAccount(customerId, accountNumber) =>
       persist(BankAccountCreated(customerId, accountNumber)) { _ =>
@@ -53,16 +64,20 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
       }
   }
 
+  /**
+    * In the active state I am ready for a new transaction. This can be modified to handle non-transactional
+    * behavior in addition if appropriate.
+    */
   def active: Receive = {
     case StartTransaction(transactionId, cmd)  =>
       cmd match {
-        case DepositFunds(accountNumber, amount, _) =>
+        case DepositFunds(accountNumber, amount) =>
           persist(Tagged(TransactionStarted(transactionId, FundsDeposited(accountNumber, amount)),
             Set(transactionId))) { evt =>
               state = state.copy(pendingBalance = state.balance + amount)
               transitionToInTransaction(evt.payload.asInstanceOf[TransactionalEventEnvelope])
           }
-        case WithdrawFunds(accountNumber, amount, _) =>
+        case WithdrawFunds(accountNumber, amount) =>
           if (state.balance - amount >= 0)
             persist(Tagged(TransactionStarted(transactionId, FundsWithdrawn(accountNumber, amount)),
               Set( transactionId))) { evt =>
@@ -78,6 +93,10 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
       }
   }
 
+  /**
+    * When in a transaction I can only handle commits and rollbacs.
+    * @param processing TransactionalEvent the event that was the start of this transaction.
+    */
   def inTransaction(processing: TransactionalEvent): Receive = {
     case CommitTransaction(transactionId, _) =>
       persist(Tagged(TransactionCleared(transactionId, processing), Set(transactionId))) { _ =>
