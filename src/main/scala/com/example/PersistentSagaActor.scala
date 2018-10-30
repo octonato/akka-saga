@@ -1,12 +1,7 @@
 package com.example
 
-import akka.NotUsed
 import akka.actor.{ActorLogging, ActorRef, Props, ReceiveTimeout}
 import akka.persistence.{PersistentActor, SnapshotOffer}
-import akka.persistence.query.journal.leveldb.scaladsl.LeveldbReadJournal
-import akka.persistence.query.{EventEnvelope, Offset, PersistenceQuery}
-import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.Source
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
@@ -85,10 +80,12 @@ object PersistentSagaActor {
   * such as retrying rollback over and over as well as retry of transactions over and over if necessary, before
   * rollback.
   */
-class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentActor with ActorLogging {
+class PersistentSagaActor(persistentEntityRegion: ActorRef)
+  extends PersistentActor with EventSubscription with ActorLogging {
 
   import PersistentSagaActor._
   import SagaStates._
+  import EventSubscription._
 
   implicit def ec: ExecutionContext = context.system.dispatcher
 
@@ -116,15 +113,6 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
     */
   private var state: SagaState = SagaState(persistenceId)
 
-  // Subscribe to event log for all events for this transaction and call self back with confirmed event.
-  private case class TransactionalEventConfirmed(envelope: TransactionalEventEnvelope)
-  implicit private val materializer = ActorMaterializer()
-  private val readJournal = PersistenceQuery(context.system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
-  private val source: Source[EventEnvelope, NotUsed] = readJournal.eventsByTag(persistenceId, Offset.noOffset)
-  source.map(_.event).runForeach {
-    case envelope: TransactionalEventEnvelope => self ! TransactionalEventConfirmed(envelope)
-  }
-
   final override def receiveCommand: Receive = uninitialized.orElse(stateReporting)
 
   /**
@@ -148,6 +136,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
 
   /**
     * The pending state. No commit OR rollback will occur until all pending events are in place, as per a Saga.
+    * Here we receive event subscription messages applicable to "pending".
     */
   private def pending: Receive = {
     case TransactionalEventConfirmed(envelope) =>
@@ -175,6 +164,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
   /**
     * The committing state. When in this state we can only repeatedly attempt to commit. This transaction will remain
     * alive until commits have occurred across the board.
+    * Here we receive event subscription messages applicable to "committing".
     */
   private def committing: Receive = {
     case TransactionalEventConfirmed(envelope) =>
@@ -203,6 +193,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
   /**
     * The rolling back state. When in this state we can only repeatedly attempt to rollback. This transaction will remain
     * alive until rollbacks have occurred across the board.
+    * Here we receive event subscription messages applicable to "rollingBack".
     */
   private def rollingBack: Receive = {
     case TransactionalEventConfirmed(envelope) =>
