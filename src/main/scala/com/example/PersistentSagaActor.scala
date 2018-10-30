@@ -27,6 +27,7 @@ object PersistentSagaActor {
 
   // Transactional event wrappers.
   case class TransactionStarted(transactionId: TransactionId, event: TransactionalEvent) extends TransactionalEventEnvelope
+  case class TransactionException(transactionId: TransactionId, event: TransactionalEvent) extends TransactionalEventEnvelope
   case class TransactionCleared(transactionId: TransactionId, event: TransactionalEvent) extends TransactionalEventEnvelope
   case class TransactionReversed(transactionId: TransactionId, event: TransactionalEvent) extends TransactionalEventEnvelope
 
@@ -41,11 +42,6 @@ object PersistentSagaActor {
 
   // Trait for any entity events participating in a saga.
   trait TransactionalEvent {
-    def entityId: EntityId
-  }
-
-  // Trait for any exception entity events.
-  trait TransactionalExceptionEvent {
     def entityId: EntityId
   }
 
@@ -73,7 +69,7 @@ object PersistentSagaActor {
     pendingConfirmed: Seq[PersistenceId] = Seq.empty,
     commitConfirmed: Seq[PersistenceId] = Seq.empty,
     rollbackConfirmed: Seq[PersistenceId] = Seq.empty,
-    exceptions: Seq[TransactionalExceptionEvent] = Seq.empty)
+    exceptions: Seq[TransactionalEventEnvelope] = Seq.empty)
 
   /**
     * Props factory method.
@@ -121,13 +117,12 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
   private var state: SagaState = SagaState(persistenceId)
 
   // Subscribe to event log for all events for this transaction and call self back with confirmed event.
-  private case class TransactionalEventConfirmed(evt: TransactionalEvent)
+  private case class TransactionalEventConfirmed(envelope: TransactionalEventEnvelope)
   implicit private val materializer = ActorMaterializer()
   private val readJournal = PersistenceQuery(context.system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
   private val source: Source[EventEnvelope, NotUsed] = readJournal.eventsByTag(persistenceId, Offset.noOffset)
-
   source.map(_.event).runForeach {
-    case evt: TransactionalEvent => self ! TransactionalEventConfirmed(evt)
+    case envelope: TransactionalEventEnvelope => self ! TransactionalEventConfirmed(envelope)
   }
 
   final override def receiveCommand: Receive = uninitialized.orElse(stateReporting)
@@ -155,20 +150,18 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
     * The pending state. No commit OR rollback will occur until all pending events are in place, as per a Saga.
     */
   private def pending: Receive = {
-    case TransactionalEventConfirmed(evt) =>
-      evt match {
-        case ex: TransactionalExceptionEvent =>
-          if (!state.exceptions.contains(ex.entityId)) {
-            state = state.copy(exceptions = state.exceptions :+ ex)
-            val txt = s"Transaction rolling back when possible due to exception on account ${ex.entityId}."
-            log.error(txt)
+    case TransactionalEventConfirmed(envelope) =>
+      envelope match {
+        case _: TransactionStarted =>
+          if (!state.pendingConfirmed.contains(envelope.event.entityId)) {
+            state = state.copy(pendingConfirmed = state.pendingConfirmed :+ envelope.event.entityId)
             saveSnapshot(state)
             pendingTransitionCheck()
           }
-
-        case evt: TransactionalEvent =>
-          if (!state.pendingConfirmed.contains(evt.entityId)) {
-            state = state.copy(pendingConfirmed = state.pendingConfirmed :+ evt.entityId)
+        case _: TransactionException =>
+          if (!state.exceptions.contains(envelope.event.entityId)) {
+            state = state.copy(exceptions = state.exceptions :+ envelope)
+            log.error(s"Transaction rolling back when possible due to exception on account ${envelope.event.entityId}.")
             saveSnapshot(state)
             pendingTransitionCheck()
           }
@@ -184,9 +177,9 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
     * alive until commits have occurred across the board.
     */
   private def committing: Receive = {
-    case TransactionalEventConfirmed(evt) =>
-      if (!state.commitConfirmed.contains(evt.entityId)) {
-        state = state.copy(commitConfirmed = state.commitConfirmed :+ evt.entityId)
+    case TransactionalEventConfirmed(envelope) =>
+      if (!state.commitConfirmed.contains(envelope.event.entityId)) {
+        state = state.copy(commitConfirmed = state.commitConfirmed :+ envelope.event.entityId)
         saveSnapshot(state)
       }
 
@@ -196,7 +189,10 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
         state = state.copy(currentState = Complete)
         saveSnapshot(state)
         context.setReceiveTimeout(keepAliveAfterCompletion)
-        context.become(stateReporting) // Stick around for a bit for the sake of reporting.
+        context.become(stateReporting.orElse {
+          case ReceiveTimeout =>
+            context.stop(self)
+        })
       }
 
     case Retry =>
@@ -209,9 +205,9 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
     * alive until rollbacks have occurred across the board.
     */
   private def rollingBack: Receive = {
-    case TransactionalEventConfirmed(evt) =>
-      if (!state.commitConfirmed.contains(evt.entityId)) {
-        state = state.copy(rollbackConfirmed = state.rollbackConfirmed :+ evt.entityId)
+    case TransactionalEventConfirmed(envelope) =>
+      if (!state.commitConfirmed.contains(envelope.event.entityId)) {
+        state = state.copy(rollbackConfirmed = state.rollbackConfirmed :+ envelope.event.entityId)
         saveSnapshot(state)
       }
 
@@ -221,7 +217,10 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
         state = state.copy(currentState = Complete)
         saveSnapshot(state)
         context.setReceiveTimeout(keepAliveAfterCompletion)
-        context.become(stateReporting) // Stick around for a bit for the sake of reporting.
+        context.become(stateReporting.orElse {
+          case ReceiveTimeout =>
+            context.stop(self)
+        })
       }
 
     case Retry =>
@@ -241,7 +240,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
         context.become(committing.orElse(stateReporting))
 
         state.commands.foreach(c =>
-          persistentEntityRegion ! CommitTransaction(c.entityId, state.transactionId)
+          persistentEntityRegion ! CommitTransaction(transactionId, c.entityId)
         )
       }
       else {
@@ -264,9 +263,6 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef) extends PersistentAc
     */
   private def stateReporting: Receive = {
     case GetBankAccountSagaState => sender() ! state
-    case ReceiveTimeout =>
-      // It is possible for this saga to be started just for state reporting, so let's not stay in memory.
-      context.stop(self)
   }
 
   final override def receiveRecover: Receive = {

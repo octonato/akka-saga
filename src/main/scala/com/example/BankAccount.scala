@@ -85,10 +85,10 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
               transitionToInTransaction(evt.payload.asInstanceOf[TransactionalEventEnvelope])
             }
           else {
-            persist(Tagged(InsufficientFunds(accountNumber, state.balance, amount), Set(transactionId)))
-            { _ =>
-              transitionToActive()
-            }
+            persist(Tagged(TransactionException(transactionId, InsufficientFunds(accountNumber, state.balance, amount)),
+              Set(transactionId))) { _ =>
+                transitionToActive()
+              }
           }
       }
   }
