@@ -24,10 +24,8 @@ object BankAccountSagaSpec {
       |akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
       |akka.persistence.snapshot-store.local.dir = "target/snapshots"
       |akka.actor.warn-about-java-serializer-usage = "false"
-      |#log-dead-letters-during-shutdown = off
-      |#log-dead-letters = off
-      |akka-saga.bank-account.saga.retryAfter = 5 minutes
-      |akka-saga.bank-account.saga.keepAliveAfterCompletion = 10 seconds
+      |akka-saga.bank-account.saga.retry-after = 5 minutes
+      |akka-saga.bank-account.saga.keep-alive-after-completion = 10 seconds
     """.stripMargin
 }
 

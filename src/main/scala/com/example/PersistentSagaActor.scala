@@ -97,14 +97,14 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef)
     */
   private val keepAliveAfterCompletion: FiniteDuration =
     Duration.fromNanos(context.system.settings.config
-      .getDuration("akka-saga.bank-account.saga.keepAliveAfterCompletion").toNanos())
+      .getDuration("akka-saga.bank-account.saga.keep-alive-after-completion").toNanos())
 
   /**
     * How often to retry transactions on an entity when no confirmation received.
     */
   private val retryAfter: FiniteDuration =
     Duration.fromNanos(context.system.settings.config
-      .getDuration("akka-saga.bank-account.saga.retryAfter").toNanos())
+      .getDuration("akka-saga.bank-account.saga.retry-after").toNanos())
 
   private case object Retry
 

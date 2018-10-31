@@ -24,8 +24,6 @@ object BankAccountSpec {
       |akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
       |akka.persistence.snapshot-store.local.dir = "target/snapshots"
       |akka.actor.warn-about-java-serializer-usage = "false"
-      |log-dead-letters-during-shutdown = off
-      |log-dead-letters = off
     """.stripMargin
 }
 

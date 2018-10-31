@@ -28,10 +28,25 @@ fail, the entire batch must fail.
 
 ## Deployment
 
-This is completely ready to deploy using our enterprise suite tooling onto Kubernetes Minikube.
+This is completely ready to deploy using our enterprise suite tooling onto Kubernetes Minikube. Change into the
+project folder and do the following for Mac OS. You must have or obtain Lightbend credentials to run this project.
+See project/plugins.sbt. For credentials, please go here: https://www.lightbend.com/contact
 
-TODO:
-
-Add retry functionality
-Get tests refactored and working
-Test on ES2.0
+1. Install VirtualBox, kubectl and minikube. See: https://kubernetes.io/docs/tasks/tools/install-minikube/
+2. minikube start --cpus 3 --memory 4000
+3. minikube addons enable ingress
+4. kubectl apply -f rbac.yaml
+5. eval $(minikube docker-env)
+6. sbt docker:publishLocal
+7. rp generate-kubernetes-resources "akka-saga:0.1.0" \
+     --generate-pod-controllers --generate-services \
+     --pod-controller-replicas 4 | kubectl apply -f -
+     
+8. rp generate-kubernetes-resources \
+     --generate-ingress --ingress-name akka-saga \
+     "akka-saga:0.1.0" | kubectl apply -f -
+9. If using Postman or similar, edit your etc/hosts file and add '192.168.99.100	akka-saga.io'
+10. You can test this in Postman with a POST to http://akka-saga.io/bank-accounts.
+Set the body to: {"customerId": "customer1", "accountNumber": "accountNumber1"}
+Add the Content-Type header with a value of application/json
+You should see: CreateBankAccount accepted with number: accountNumber1

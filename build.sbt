@@ -2,19 +2,13 @@ name := "akka-saga"
 
 version := "0.1.0"
 
-scalaVersion := "2.12.6"
+scalaVersion := "2.12.7"
 
 lazy val akkaVersion = "2.5.17"
 
 lazy val httpVersion = "10.1.5"
 
 //enablePlugins(SbtReactiveAppPlugin, Cinnamon)
-
-//import com.typesafe.sbt.SbtMultiJvm.multiJvmSettings
-
-lazy val root = (project in file("."))
-  .enablePlugins(MultiJvmPlugin)
-  .configs(MultiJvm)
 
 scalacOptions := Seq("-Ywarn-unused", "-Ywarn-dead-code", "-Ywarn-unused-import")
 
@@ -46,15 +40,15 @@ libraryDependencies ++= Seq(
 
 mainClass in Compile := Some("com.example.AkkaSagaApp")
 
-//enableAkkaClusterBootstrap := true
+// Reactive CLI integration for Kubernetes
+enablePlugins(SbtReactiveAppPlugin)
+enableAkkaClusterBootstrap := true
+endpoints += HttpEndpoint("http", 8080, HttpIngress(Seq(80), Seq("akka-saga.io"), Seq("/")))
 
-//endpoints += TcpEndpoint("cinnamon", 9001, None)
-//endpoints += HttpEndpoint("http", 8080, HttpIngress(Seq(80), Seq("akka-saga.io"), Seq("/")))
-
-//annotations := Map(
-//  // enable scraping
-//  "prometheus.io/scrape" -> "true",
-//  "prometheus.io/port" -> "9091"
-//)
+annotations := Map(
+  // enable scraping
+  "prometheus.io/scrape" -> "true",
+  "prometheus.io/port" -> "9001"
+)
 
 fork := true

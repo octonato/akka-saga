@@ -2,7 +2,7 @@ package com.example
 
 import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 import akka.http.scaladsl.testkit.ScalatestRouteTest
-import akka.actor.{Actor, ActorRef, Props}
+import akka.actor.{Actor, Props}
 import akka.http.scaladsl.model.StatusCodes
 import akka.testkit.{TestKit, TestProbe}
 import akka.util.Timeout
@@ -16,7 +16,6 @@ class BankAccountRoutesSpec extends WordSpecLike
   import BankAccountCommands._
 
   override implicit val timeout: Timeout = 5.seconds
-  override val clusterListener: ActorRef = null // not testing this
 
   override def afterAll: Unit = {
     TestKit.shutdownActorSystem(system)

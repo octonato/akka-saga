@@ -62,7 +62,6 @@ trait BankAccountRoutes extends BankAccountJsonSupport {
 
   def bankAccountSagaRegion: ActorRef
   def bankAccountRegion: ActorRef
-  def clusterListener: ActorRef
   def transactionIdGenerator: TransactionIdGenerator = new TransactionIdGeneratorImpl
 
   implicit val system: ActorSystem
