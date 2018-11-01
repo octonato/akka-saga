@@ -3,6 +3,7 @@ package com.example
 import akka.NotUsed
 import akka.actor.{ActorSystem, PoisonPill, Props, Terminated}
 import akka.pattern.ask
+import akka.persistence.cassandra.query.scaladsl.CassandraReadJournal
 import akka.persistence.query.{EventEnvelope, PersistenceQuery}
 import akka.persistence.query.journal.leveldb.scaladsl.LeveldbReadJournal
 import akka.stream.ActorMaterializer
@@ -17,14 +18,29 @@ import scala.concurrent.duration._
 
 object BankAccountSpec {
 
+  val Cassandra = false
+
+  private val Journal =
+    if (Cassandra) {
+      """
+        |akka.persistence.journal.plugin = "cassandra-journal"
+        |akka.persistence.snapshot-store.plugin = "cassandra-snapshot-store"
+        |cassandra-query-journal.refresh-interval = 20ms
+      """.stripMargin
+    }
+    else {
+      """
+        |akka.persistence.journal.plugin = "akka.persistence.journal.leveldb"
+        |akka.persistence.journal.leveldb.dir = "target/leveldb"
+        |akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
+        |akka.persistence.snapshot-store.local.dir = "target/snapshots"
+      """.stripMargin
+    }
+
   val Config =
     """
-      |akka.persistence.journal.plugin = "akka.persistence.journal.leveldb"
-      |akka.persistence.journal.leveldb.dir = "target/shared"
-      |akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
-      |akka.persistence.snapshot-store.local.dir = "target/snapshots"
       |akka.actor.warn-about-java-serializer-usage = "false"
-    """.stripMargin
+    """.stripMargin + Journal
 }
 
 class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFactory.parseString(BankAccountSpec.Config)))
@@ -37,7 +53,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
     TestKit.shutdownActorSystem(system)
   }
 
-  implicit val timeout = Timeout(5 seconds)
+  implicit val timeout = Timeout(60.seconds)
 
   "a BankAccount" should {
 
@@ -50,7 +66,15 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
     val bankAccount = system.actorOf(Props(classOf[BankAccount]), AccountNumber)
 
     implicit val mat = ActorMaterializer()(system)
-    val queries = PersistenceQuery(system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
+
+    val readJournal =
+      if (BankAccountSpec.Cassandra)
+      PersistenceQuery(system).readJournalFor[CassandraReadJournal](CassandraReadJournal.Identifier)
+    else
+      PersistenceQuery(system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
+
+    // Set up bank account query side projection.
+    val bankAccountsQuery = system.actorOf(BankAccountsQuery.props, name = "bank-accounts-query")
 
     "properly be created with CreateBankAccount command" in {
       val cmd = CreateBankAccount(CustomerNumber, AccountNumber)
@@ -59,7 +83,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       expectMsg(BankAccountState(Active, 0, 0))
 
       val src: Source[EventEnvelope, NotUsed] =
-        queries.eventsByPersistenceId(AccountNumber, 1L, Long.MaxValue)
+        readJournal.eventsByPersistenceId(AccountNumber, 1L, Long.MaxValue)
       val evt = Await.result(src.map(_.event).runWith(Sink.head), timeout.duration)
       evt shouldBe(BankAccountCreated(CustomerNumber, AccountNumber))
     }
@@ -73,9 +97,9 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       expectMsg(BankAccountState(InTransaction, 0, 10))
 
       val src: Source[EventEnvelope, NotUsed] =
-        queries.eventsByPersistenceId(AccountNumber, 2L, Long.MaxValue)
+        readJournal.eventsByPersistenceId(AccountNumber, 2L, Long.MaxValue)
       val evt = Await.result(src.map(_.event).runWith(Sink.head), timeout.duration)
-      evt shouldBe(TransactionStarted(TransactionId, FundsDeposited(AccountNumber, Amount)))
+      evt shouldBe(TransactionStarted(TransactionId, AccountNumber, FundsDeposited(AccountNumber, Amount)))
     }
 
     "stash pending WithdrawFunds command while inTransaction state" in {
@@ -89,9 +113,9 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       expectMsg(BankAccountState(InTransaction, 0, 10))
 
       val src: Source[EventEnvelope, NotUsed] =
-        queries.eventsByPersistenceId(AccountNumber, 2L, Long.MaxValue)
+        readJournal.eventsByPersistenceId(AccountNumber, 2L, Long.MaxValue)
       val evt = Await.result(src.map(_.event).runWith(Sink.head), timeout.duration)
-      evt shouldBe(TransactionStarted(PreviousTransactionId, FundsDeposited(AccountNumber, PreviousAmount)))
+      evt shouldBe(TransactionStarted(PreviousTransactionId, AccountNumber, FundsDeposited(AccountNumber, PreviousAmount)))
     }
 
     "accept commit of DepositFunds for first transaction and transition back to inTransaction state to handle " +
@@ -106,14 +130,14 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       expectMsg(BankAccountState(InTransaction, 10, 5))
 
       val src1: Source[EventEnvelope, NotUsed] =
-        queries.eventsByPersistenceId(AccountNumber, 3L, Long.MaxValue)
+        readJournal.eventsByPersistenceId(AccountNumber, 3L, Long.MaxValue)
       val evt1 = Await.result(src1.map(_.event).runWith(Sink.head), timeout.duration)
-      evt1 shouldBe(TransactionCleared(PreviousTransactionId, FundsDeposited(AccountNumber, PreviousAmount)))
+      evt1 shouldBe(TransactionCleared(PreviousTransactionId, AccountNumber, FundsDeposited(AccountNumber, PreviousAmount)))
 
       val src2: Source[EventEnvelope, NotUsed] =
-        queries.eventsByPersistenceId(AccountNumber, 4L, Long.MaxValue)
+        readJournal.eventsByPersistenceId(AccountNumber, 4L, Long.MaxValue)
       val evt2 = Await.result(src2.map(_.event).runWith(Sink.head), timeout.duration)
-      evt2 shouldBe(TransactionStarted(TransactionId, FundsWithdrawn(AccountNumber, Amount)))
+      evt2 shouldBe(TransactionStarted(TransactionId, AccountNumber, FundsWithdrawn(AccountNumber, Amount)))
     }
 
     "accept commit of WithdrawFunds and transition back to active state" in {
@@ -125,9 +149,9 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       expectMsg(BankAccountState("active", 5, 0))
 
       val src: Source[EventEnvelope, NotUsed] =
-        queries.eventsByPersistenceId(AccountNumber, 5L, Long.MaxValue)
+        readJournal.eventsByPersistenceId(AccountNumber, 5L, Long.MaxValue)
       val evt = Await.result(src.map(_.event).runWith(Sink.head), timeout.duration)
-      evt shouldBe(TransactionCleared(TransactionId, FundsWithdrawn(AccountNumber, Amount)))
+      evt shouldBe(TransactionCleared(TransactionId, AccountNumber, FundsWithdrawn(AccountNumber, Amount)))
     }
 
     "accept pending DepositFunds command and then a rollback" in {
@@ -137,16 +161,16 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       bankAccount ! cmd1
 
       val src1: Source[EventEnvelope, NotUsed] =
-        queries.eventsByPersistenceId(AccountNumber, 6L, Long.MaxValue)
+        readJournal.eventsByPersistenceId(AccountNumber, 6L, Long.MaxValue)
       val evt1 = Await.result(src1.map(_.event).runWith(Sink.head), timeout.duration)
-      evt1 shouldBe(TransactionStarted(TransactionId, FundsDeposited(AccountNumber, Amount)))
+      evt1 shouldBe(TransactionStarted(TransactionId, AccountNumber, FundsDeposited(AccountNumber, Amount)))
 
       val cmd2 = RollbackTransaction(TransactionId, AccountNumber)
       bankAccount ! cmd2
       val src2: Source[EventEnvelope, NotUsed] =
-        queries.eventsByPersistenceId(AccountNumber, 7L, Long.MaxValue)
+        readJournal.eventsByPersistenceId(AccountNumber, 7L, Long.MaxValue)
       val evt2 = Await.result(src2.map(_.event).runWith(Sink.head), timeout.duration)
-      evt2 shouldBe(TransactionReversed(TransactionId, FundsDeposited(AccountNumber, Amount)))
+      evt2 shouldBe(TransactionReversed(TransactionId, AccountNumber, FundsDeposited(AccountNumber, Amount)))
 
       bankAccount ! GetBankAccountState
       expectMsg(BankAccountState("active", 5, 0))
@@ -159,16 +183,16 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       bankAccount ! cmd1
 
       val src1: Source[EventEnvelope, NotUsed] =
-        queries.eventsByPersistenceId(AccountNumber, 8L, Long.MaxValue)
+        readJournal.eventsByPersistenceId(AccountNumber, 8L, Long.MaxValue)
       val evt1 = Await.result(src1.map(_.event).runWith(Sink.head), timeout.duration)
-      evt1 shouldBe(TransactionStarted(TransactionId, FundsWithdrawn(AccountNumber, Amount)))
+      evt1 shouldBe(TransactionStarted(TransactionId, AccountNumber, FundsWithdrawn(AccountNumber, Amount)))
 
       val cmd2 = RollbackTransaction(TransactionId, AccountNumber)
       bankAccount ! cmd2
       val src2: Source[EventEnvelope, NotUsed] =
-        queries.eventsByPersistenceId(AccountNumber, 9L, Long.MaxValue)
+        readJournal.eventsByPersistenceId(AccountNumber, 9L, Long.MaxValue)
       val evt2 = Await.result(src2.map(_.event).runWith(Sink.head), timeout.duration)
-      evt2 shouldBe(TransactionReversed(TransactionId, FundsWithdrawn(AccountNumber, Amount)))
+      evt2 shouldBe(TransactionReversed(TransactionId, AccountNumber, FundsWithdrawn(AccountNumber, Amount)))
     }
 
     "replay properly" in {

@@ -3,6 +3,7 @@ package com.example
 import java.util.UUID
 
 import akka.actor.{ActorRef, ActorSystem}
+import akka.pattern.ask
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.server.Directives.{as, complete, entity, path, post}
@@ -12,6 +13,8 @@ import akka.util.Timeout
 import spray.json._
 import BankAccountCommands._
 import PersistentSagaActor._
+
+import scala.concurrent.ExecutionContext
 
 /**
   * A wrapper to start a saga containing bank account transactional commands.
@@ -33,9 +36,13 @@ case class WithdrawFundsDto(accountNumber: AccountNumber, amount: BigDecimal)
   */
 trait BankAccountJsonSupport extends SprayJsonSupport with DefaultJsonProtocol {
 
+  import BankAccountsQuery._
+
   implicit val createBankAccountFormat = jsonFormat2(CreateBankAccount)
   implicit val depositFundsFormat = jsonFormat2(DepositFundsDto)
   implicit val withdrawFundsFormat = jsonFormat2(WithdrawFundsDto)
+  implicit val bankAccountProjectionFormat = jsonFormat2(BankAccountProjection)
+  implicit val bankAccountsProjectionsFormat = jsonFormat1(BankAccountProjections)
 
   implicit val startBankAccountTransactionFormat = jsonFormat2(StartBankAccountTransaction)
 }
@@ -60,12 +67,16 @@ class TransactionIdGeneratorImpl extends TransactionIdGenerator {
   */
 trait BankAccountRoutes extends BankAccountJsonSupport {
 
+  import BankAccountsQuery._
+
   def bankAccountSagaRegion: ActorRef
   def bankAccountRegion: ActorRef
   def transactionIdGenerator: TransactionIdGenerator = new TransactionIdGeneratorImpl
+  def bankAccountsQuery: ActorRef
 
   implicit val system: ActorSystem
   implicit def timeout: Timeout
+  implicit def ec: ExecutionContext = system.dispatcher
 
   val route: Route =
     path("bank-accounts") {
@@ -81,6 +92,11 @@ trait BankAccountRoutes extends BankAccountJsonSupport {
           bankAccountRegion ! cmd
           complete(StatusCodes.Accepted, s"CreateBankAccount accepted with number: ${cmd.accountNumber}")
         }
+      } ~
+      get {
+        complete(
+          (bankAccountsQuery ? GetBankAccountProjections).mapTo[BankAccountProjections]
+        )
       }
     }
 

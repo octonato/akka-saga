@@ -21,10 +21,10 @@ object PersistentSagaActor {
   case class RollbackTransaction(transactionId: TransactionId, entityId: EntityId)
 
   // Transactional event wrappers.
-  case class TransactionStarted(transactionId: TransactionId, event: TransactionalEvent) extends TransactionalEventEnvelope
-  case class TransactionException(transactionId: TransactionId, event: TransactionalEvent) extends TransactionalEventEnvelope
-  case class TransactionCleared(transactionId: TransactionId, event: TransactionalEvent) extends TransactionalEventEnvelope
-  case class TransactionReversed(transactionId: TransactionId, event: TransactionalEvent) extends TransactionalEventEnvelope
+  case class TransactionStarted(transactionId: TransactionId, entityId: EntityId, event: TransactionalEvent) extends TransactionalEventEnvelope
+  case class TransactionException(transactionId: TransactionId, entityId: EntityId, event: TransactionalEvent) extends TransactionalEventEnvelope
+  case class TransactionCleared(transactionId: TransactionId, entityId: EntityId, event: TransactionalEvent) extends TransactionalEventEnvelope
+  case class TransactionReversed(transactionId: TransactionId, entityId: EntityId, event: TransactionalEvent) extends TransactionalEventEnvelope
 
   trait PersistentActorSagaCommand {
     def transactionId: TransactionId
@@ -36,13 +36,12 @@ object PersistentSagaActor {
   }
 
   // Trait for any entity events participating in a saga.
-  trait TransactionalEvent {
-    def entityId: EntityId
-  }
+  trait TransactionalEvent
 
   // Envelope to wrap events.
   trait TransactionalEventEnvelope {
     def transactionId: TransactionId
+    def entityId: EntityId
     def event: TransactionalEvent
   }
 
@@ -81,16 +80,17 @@ object PersistentSagaActor {
   * rollback.
   */
 class PersistentSagaActor(persistentEntityRegion: ActorRef)
-  extends PersistentActor with EventSubscription with ActorLogging {
+  extends PersistentActor with TaggedEventSubscription with ActorLogging {
 
   import PersistentSagaActor._
   import SagaStates._
-  import EventSubscription._
+  import TaggedEventSubscription._
 
   implicit def ec: ExecutionContext = context.system.dispatcher
 
   override def persistenceId: String = self.path.name
   val transactionId = persistenceId
+  override val eventTag = transactionId
 
   /**
     * How long to stick around for reporting purposes after completion.
@@ -128,6 +128,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef)
       saveSnapshot(state)
       context.become(pending.orElse(stateReporting))
       context.system.scheduler.scheduleOnce(retryAfter, self, Retry)
+      subscribeToEvents()
 
       commands.foreach { cmd =>
         persistentEntityRegion ! StartTransaction(state.transactionId, cmd)
@@ -139,20 +140,23 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef)
     * Here we receive event subscription messages applicable to "pending".
     */
   private def pending: Receive = {
-    case TransactionalEventConfirmed(envelope) =>
-      envelope match {
-        case _: TransactionStarted =>
-          if (!state.pendingConfirmed.contains(envelope.event.entityId)) {
-            state = state.copy(pendingConfirmed = state.pendingConfirmed :+ envelope.event.entityId)
-            saveSnapshot(state)
-            pendingTransitionCheck()
-          }
-        case _: TransactionException =>
-          if (!state.exceptions.contains(envelope.event.entityId)) {
-            state = state.copy(exceptions = state.exceptions :+ envelope)
-            log.error(s"Transaction rolling back when possible due to exception on account ${envelope.event.entityId}.")
-            saveSnapshot(state)
-            pendingTransitionCheck()
+    case EventConfirmed(payload) =>
+      payload match {
+        case envelope: TransactionalEventEnvelope =>
+          envelope match {
+            case _: TransactionStarted =>
+              if (!state.pendingConfirmed.contains(envelope.entityId)) {
+                state = state.copy(pendingConfirmed = state.pendingConfirmed :+ envelope.entityId)
+                saveSnapshot(state)
+                pendingTransitionCheck()
+              }
+            case _: TransactionException =>
+              if (!state.exceptions.contains(envelope.entityId)) {
+                state = state.copy(exceptions = state.exceptions :+ envelope)
+                log.error(s"Transaction rolling back when possible due to exception on account ${envelope.entityId}.")
+                saveSnapshot(state)
+                pendingTransitionCheck()
+              }
           }
       }
 
@@ -167,22 +171,25 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef)
     * Here we receive event subscription messages applicable to "committing".
     */
   private def committing: Receive = {
-    case TransactionalEventConfirmed(envelope) =>
-      if (!state.commitConfirmed.contains(envelope.event.entityId)) {
-        state = state.copy(commitConfirmed = state.commitConfirmed :+ envelope.event.entityId)
-        saveSnapshot(state)
-      }
+    case EventConfirmed(payload) =>
+      payload match {
+        case envelope: TransactionalEventEnvelope =>
+          if (!state.commitConfirmed.contains(envelope.entityId)) {
+            state = state.copy(commitConfirmed = state.commitConfirmed :+ envelope.entityId)
+            saveSnapshot(state)
+          }
 
-      // Check if done here
-      if (state.commitConfirmed.size == state.commands.size) {
-        log.info(s"Bank account saga completed successfully for transactionId: ${state.transactionId}")
-        state = state.copy(currentState = Complete)
-        saveSnapshot(state)
-        context.setReceiveTimeout(keepAliveAfterCompletion)
-        context.become(stateReporting.orElse {
-          case ReceiveTimeout =>
-            context.stop(self)
-        })
+          // Check if done here
+          if (state.commitConfirmed.size == state.commands.size) {
+            log.info(s"Bank account saga completed successfully for transactionId: ${state.transactionId}")
+            state = state.copy(currentState = Complete)
+            saveSnapshot(state)
+            context.setReceiveTimeout(keepAliveAfterCompletion)
+            context.become(stateReporting.orElse {
+              case ReceiveTimeout =>
+                context.stop(self)
+            })
+          }
       }
 
     case Retry =>
@@ -196,22 +203,25 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef)
     * Here we receive event subscription messages applicable to "rollingBack".
     */
   private def rollingBack: Receive = {
-    case TransactionalEventConfirmed(envelope) =>
-      if (!state.commitConfirmed.contains(envelope.event.entityId)) {
-        state = state.copy(rollbackConfirmed = state.rollbackConfirmed :+ envelope.event.entityId)
-        saveSnapshot(state)
-      }
+    case EventConfirmed(payload) =>
+      payload match {
+        case envelope: TransactionalEventEnvelope =>
+          if (!state.commitConfirmed.contains(envelope.entityId)) {
+            state = state.copy(rollbackConfirmed = state.rollbackConfirmed :+ envelope.entityId)
+            saveSnapshot(state)
+          }
 
-      // Check if done here
-      if (state.rollbackConfirmed.size == state.commands.size - state.exceptions.size) {
-        log.info(s"Bank account saga rolled back successfully for transactionId: ${state.transactionId}")
-        state = state.copy(currentState = Complete)
-        saveSnapshot(state)
-        context.setReceiveTimeout(keepAliveAfterCompletion)
-        context.become(stateReporting.orElse {
-          case ReceiveTimeout =>
-            context.stop(self)
-        })
+          // Check if done here
+          if (state.rollbackConfirmed.size == state.commands.size - state.exceptions.size) {
+            log.info(s"Bank account saga rolled back successfully for transactionId: ${state.transactionId}")
+            state = state.copy(currentState = Complete)
+            saveSnapshot(state)
+            context.setReceiveTimeout(keepAliveAfterCompletion)
+            context.become(stateReporting.orElse {
+              case ReceiveTimeout =>
+                context.stop(self)
+            })
+          }
       }
 
     case Retry =>

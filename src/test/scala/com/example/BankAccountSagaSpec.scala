@@ -3,6 +3,7 @@ package com.example
 import akka.NotUsed
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.pattern.ask
+import akka.persistence.cassandra.query.scaladsl.CassandraReadJournal
 import akka.persistence.query.{EventEnvelope, Offset, PersistenceQuery}
 import akka.persistence.query.journal.leveldb.scaladsl.LeveldbReadJournal
 import akka.stream.ActorMaterializer
@@ -17,16 +18,31 @@ import scala.concurrent.duration._
 
 object BankAccountSagaSpec {
 
+  val Cassandra = false
+
+  private val Journal =
+    if (Cassandra) {
+      """
+        |akka.persistence.journal.plugin = "cassandra-journal"
+        |akka.persistence.snapshot-store.plugin = "cassandra-snapshot-store"
+        |cassandra-query-journal.refresh-interval = 20ms
+      """.stripMargin
+    }
+    else {
+      """
+        |akka.persistence.journal.plugin = "akka.persistence.journal.leveldb"
+        |akka.persistence.journal.leveldb.dir = "target/leveldb"
+        |akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
+        |akka.persistence.snapshot-store.local.dir = "target/snapshots"
+      """.stripMargin
+    }
+
   val Config =
     """
-      |akka.persistence.journal.plugin = "akka.persistence.journal.leveldb"
-      |akka.persistence.journal.leveldb.dir = "target/leveldb"
-      |akka.persistence.snapshot-store.plugin = "akka.persistence.snapshot-store.local"
-      |akka.persistence.snapshot-store.local.dir = "target/snapshots"
       |akka.actor.warn-about-java-serializer-usage = "false"
       |akka-saga.bank-account.saga.retry-after = 5 minutes
-      |akka-saga.bank-account.saga.keep-alive-after-completion = 10 seconds
-    """.stripMargin
+      |akka-saga.bank-account.saga.keep-alive-after-completion = 5 minutes
+    """.stripMargin + Journal
 }
 
 class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", ConfigFactory.parseString(BankAccountSagaSpec.Config)))
@@ -41,7 +57,7 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
     TestKit.shutdownActorSystem(system)
   }
 
-  implicit val timeout = Timeout(5 seconds)
+  implicit val timeout = Timeout(60.seconds)
 
   "a BankAccountSaga" should {
 
@@ -76,7 +92,11 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
     val sagaProbe: TestProbe = TestProbe()
 
     implicit val mat = ActorMaterializer()(system)
-    val readJournal = PersistenceQuery(system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
+    val readJournal =
+      if (BankAccountSagaSpec.Cassandra)
+        PersistenceQuery(system).readJournalFor[CassandraReadJournal](CassandraReadJournal.Identifier)
+      else
+        PersistenceQuery(system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
 
     // Set up subscription actor to received events from journal, to be easily queried for this spec.
     case class BankAccountTransactionConfirmed(envelope: TransactionalEventEnvelope, sort: String)
@@ -104,7 +124,7 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
 
       val source: Source[EventEnvelope, NotUsed] = readJournal.eventsByTag(TransactionId, Offset.noOffset)
       source.map(_.event).runForeach {
-        case envelope: TransactionalEventEnvelope => eventReceiver ! BankAccountTransactionConfirmed(envelope, envelope.event.entityId)
+        case envelope: TransactionalEventEnvelope => eventReceiver ! BankAccountTransactionConfirmed(envelope, envelope.entityId)
       }
 
       val saga = system.actorOf(PersistentSagaActor.props(bankAccountRegion), TransactionId)
@@ -118,17 +138,19 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
       )
 
       saga ! StartSaga(TransactionId, cmds)
-      sagaProbe.send(saga, GetBankAccountSagaState)
-      sagaProbe.expectMsg(SagaState(TransactionId, Pending, cmds))
+
+      sagaProbe.awaitCond(Await.result((saga ? GetBankAccountSagaState)
+        .mapTo[SagaState], timeout.duration).currentState == Pending,
+        timeout.duration, 100.milliseconds, s"Expected state of $Pending not reached.")
 
       val probe: TestProbe = TestProbe()
       val ExpectedEvents = Seq(
-        TransactionStarted(TransactionId, FundsDeposited("accountNumber1", 10)),
-        TransactionCleared(TransactionId, FundsDeposited("accountNumber1", 10)),
-        TransactionStarted(TransactionId, FundsDeposited("accountNumber2", 20)),
-        TransactionCleared(TransactionId, FundsDeposited("accountNumber2", 20)),
-        TransactionStarted(TransactionId, FundsDeposited("accountNumber3", 30)),
-        TransactionCleared(TransactionId, FundsDeposited("accountNumber3", 30))
+        TransactionStarted(TransactionId, "accountNumber1", FundsDeposited("accountNumber1", 10)),
+        TransactionCleared(TransactionId, "accountNumber1", FundsDeposited("accountNumber1", 10)),
+        TransactionStarted(TransactionId, "accountNumber2", FundsDeposited("accountNumber2", 20)),
+        TransactionCleared(TransactionId, "accountNumber2", FundsDeposited("accountNumber2", 20)),
+        TransactionStarted(TransactionId, "accountNumber3", FundsDeposited("accountNumber3", 30)),
+        TransactionCleared(TransactionId, "accountNumber3", FundsDeposited("accountNumber3", 30))
       )
 
       probe.awaitCond(Await.result((eventReceiver ? GetEvents)
@@ -155,7 +177,7 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
 
       val source: Source[EventEnvelope, NotUsed] = readJournal.eventsByTag(TransactionId, Offset.noOffset)
       source.map(_.event).runForeach {
-        case envelope: TransactionalEventEnvelope => eventReceiver ! BankAccountTransactionConfirmed(envelope, envelope.event.entityId)
+        case envelope: TransactionalEventEnvelope => eventReceiver ! BankAccountTransactionConfirmed(envelope, envelope.entityId)
       }
 
       val saga = system.actorOf(PersistentSagaActor.props(bankAccountRegion), TransactionId)
@@ -173,11 +195,11 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
       val probe: TestProbe = TestProbe()
       val Expected: GetEventsResult = GetEventsResult(
         Seq(
-          TransactionStarted(TransactionId, FundsWithdrawn("accountNumber2", 20)),
-          TransactionReversed(TransactionId, FundsWithdrawn("accountNumber2", 20)),
-          TransactionStarted(TransactionId, FundsWithdrawn("accountNumber3", 30)),
-          TransactionReversed(TransactionId, FundsWithdrawn("accountNumber3", 30)),
-          TransactionException(TransactionId, InsufficientFunds("accountNumber1", 10, 11)),
+          TransactionStarted(TransactionId, "accountNumber2", FundsWithdrawn("accountNumber2", 20)),
+          TransactionReversed(TransactionId, "accountNumber2", FundsWithdrawn("accountNumber2", 20)),
+          TransactionStarted(TransactionId, "accountNumber3", FundsWithdrawn("accountNumber3", 30)),
+          TransactionReversed(TransactionId, "accountNumber3", FundsWithdrawn("accountNumber3", 30)),
+          TransactionException(TransactionId, "accountNumber1", InsufficientFunds("accountNumber1", 10, 11)),
         )
       )
 
@@ -195,7 +217,7 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
           state.pendingConfirmed.sorted should be(Seq("accountNumber2", "accountNumber3"))
           state.commitConfirmed.sorted should be(Nil)
           state.rollbackConfirmed.sortWith(_ < _) should be(Seq("accountNumber2", "accountNumber3"))
-          state.exceptions should be(Seq(TransactionException(TransactionId, InsufficientFunds("accountNumber1", 10, 11))))
+          state.exceptions should be(Seq(TransactionException(TransactionId, "accountNumber1", InsufficientFunds("accountNumber1", 10, 11))))
       }
     }
   }

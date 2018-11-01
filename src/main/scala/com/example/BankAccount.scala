@@ -16,6 +16,8 @@ case object BankAccount {
     val InTransaction = "inTransaction"
   }
 
+  val EntityName = "bank-account"
+
   /**
     * The state of a bank account in time. This may be made private, but for convenience in testing I left it
     * sharable via asking the actor.
@@ -58,7 +60,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
     */
   def default: Receive = {
     case CreateBankAccount(customerId, accountNumber) =>
-      persist(BankAccountCreated(customerId, accountNumber)) { _ =>
+      persist(Tagged(BankAccountCreated(customerId, accountNumber), Set(EntityName))) { _ =>
         log.info(s"Creating BankAccount with persistenceId $persistenceId")
         transitionToActive()
       }
@@ -72,21 +74,21 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
     case StartTransaction(transactionId, cmd)  =>
       cmd match {
         case DepositFunds(accountNumber, amount) =>
-          persist(Tagged(TransactionStarted(transactionId, FundsDeposited(accountNumber, amount)),
-            Set(transactionId))) { evt =>
+          persist(Tagged(TransactionStarted(transactionId, persistenceId, FundsDeposited(accountNumber, amount)),
+            Set(transactionId, EntityName))) { evt =>
               state = state.copy(pendingBalance = state.balance + amount)
               transitionToInTransaction(evt.payload.asInstanceOf[TransactionalEventEnvelope])
           }
         case WithdrawFunds(accountNumber, amount) =>
           if (state.balance - amount >= 0)
-            persist(Tagged(TransactionStarted(transactionId, FundsWithdrawn(accountNumber, amount)),
-              Set( transactionId))) { evt =>
+            persist(Tagged(TransactionStarted(transactionId, persistenceId, FundsWithdrawn(accountNumber, amount)),
+              Set(transactionId, EntityName))) { evt =>
               state = state.copy(pendingBalance = state.balance - amount)
               transitionToInTransaction(evt.payload.asInstanceOf[TransactionalEventEnvelope])
             }
           else {
-            persist(Tagged(TransactionException(transactionId, InsufficientFunds(accountNumber, state.balance, amount)),
-              Set(transactionId))) { _ =>
+            persist(Tagged(TransactionException(transactionId, persistenceId,
+              InsufficientFunds(accountNumber, state.balance, amount)), Set(transactionId, EntityName))) { _ =>
                 transitionToActive()
               }
           }
@@ -98,14 +100,14 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
     * @param processing TransactionalEvent the event that was the start of this transaction.
     */
   def inTransaction(processing: TransactionalEvent): Receive = {
-    case CommitTransaction(transactionId, _) =>
-      persist(Tagged(TransactionCleared(transactionId, processing), Set(transactionId))) { _ =>
+    case CommitTransaction(transactionId, entityId) =>
+      persist(Tagged(TransactionCleared(transactionId, entityId, processing), Set(transactionId, EntityName))) { _ =>
         state = state.copy(balance = state.pendingBalance, pendingBalance = 0)
         transitionToActive()
       }
 
-    case RollbackTransaction(transactionId, _) =>
-      persist(Tagged(TransactionReversed(transactionId, processing), Set(transactionId))) { _ =>
+    case RollbackTransaction(transactionId, entityId) =>
+      persist(Tagged(TransactionReversed(transactionId, entityId, processing), Set(transactionId, EntityName))) { _ =>
         state = state.copy(pendingBalance = 0)
         transitionToActive()
       }
@@ -140,7 +142,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
     case _: BankAccountCreated =>
       transitionToActive()
 
-    case started @ TransactionStarted(_, evt) =>
+    case started @ TransactionStarted(_, _, evt) =>
       transitionToInTransaction(started)
       val amount = evt.asInstanceOf[BankAccountTransactionalEvent].amount
 
@@ -158,6 +160,5 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
     case _: TransactionReversed =>
       state = state.copy(pendingBalance = 0)
       transitionToActive()
-
   }
 }

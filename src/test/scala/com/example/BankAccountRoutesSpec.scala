@@ -14,6 +14,7 @@ class BankAccountRoutesSpec extends WordSpecLike
   with Matchers with ScalatestRouteTest with BankAccountRoutes with BeforeAndAfterAll{
 
   import BankAccountCommands._
+  import BankAccountsQuery._
 
   override implicit val timeout: Timeout = 5.seconds
 
@@ -42,6 +43,14 @@ class BankAccountRoutesSpec extends WordSpecLike
     }
   }))
 
+  // Mock bank accounts query proxy.
+  override val bankAccountsQuery = system.actorOf(Props(new Actor {
+    override def receive: Receive = {
+      case GetBankAccountProjections =>
+        sender() ! BankAccountProjections(Seq(BankAccountProjection("accountNumber1", 100)))
+    }
+  }))
+
   "The BankAccountRoutes" should {
     "return accepted with a post of the StartTransaction command and send the command to the saga region" in {
 
@@ -64,6 +73,7 @@ class BankAccountRoutesSpec extends WordSpecLike
         DepositFunds("theAccountNumber", 2000),
         WithdrawFunds("theAccountNumber", 1000)
       )
+
       bankAccountSagaRegionProbe.expectMsg(StartSaga(transactionIdGenerator.generateId, ExpectedCommands))
     }
 
@@ -76,6 +86,14 @@ class BankAccountRoutesSpec extends WordSpecLike
       }
 
       bankAccountRegionProbe.expectMsg(Command)
+    }
+
+    "return bank account projections" in {
+
+      Get("/bank-accounts") ~> route ~> check {
+        response.status should be(StatusCodes.OK)
+        responseAs[BankAccountProjections] should be(BankAccountProjections(Seq(BankAccountProjection("accountNumber1", 100))))
+      }
     }
   }
 }

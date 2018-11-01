@@ -2,6 +2,7 @@ package com.example
 
 import akka.actor.{ActorRef, ActorSystem}
 import akka.cluster.sharding.{ClusterSharding, ClusterShardingSettings, ShardRegion}
+import akka.cluster.singleton.{ClusterSingletonManager, ClusterSingletonManagerSettings, ClusterSingletonProxy, ClusterSingletonProxySettings}
 import akka.util.Timeout
 import com.example.PersistentSagaActor.StartSaga
 
@@ -53,7 +54,13 @@ abstract class BaseApp(implicit val system: ActorSystem) {
     extractShardId = bankAccountShardIdExtractor
   )
 
-  implicit val timeout: Timeout = Timeout(5.seconds)
+  // Set up bank account query side projection.
+  system.actorOf(
+    ClusterSingletonManager.props(
+      singletonProps = BankAccountsQuery.props,
+      terminationMessage = BankAccountsQuery.Stop,
+      settings = ClusterSingletonManagerSettings(system)),
+    name = "bank-accounts-query")
 
   /**
     * Main function for running the app.
@@ -68,9 +75,15 @@ abstract class BaseApp(implicit val system: ActorSystem) {
     *
     * @return BankAccountHttpServer
     */
-  private def createHttpServer(): BankAccountHttpServer =
-    new BankAccountHttpServer(
-      bankAccountRegion,
-      bankAccountSagaRegion
-    )(system, timeout)
+  private def createHttpServer(): BankAccountHttpServer = {
+    implicit val timeout: Timeout = Timeout(5.seconds)
+
+    val bankAccountsQuery = system.actorOf(
+      ClusterSingletonProxy.props(
+        singletonManagerPath = "/user/bank-accounts-query",
+        settings = ClusterSingletonProxySettings(system)),
+      name = "bank-accounts-query-proxy")
+
+    new BankAccountHttpServer(bankAccountRegion, bankAccountSagaRegion, bankAccountsQuery)(system, timeout)
+  }
 }
