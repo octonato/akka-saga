@@ -7,12 +7,13 @@ import akka.persistence.query.{EventEnvelope, Offset, PersistenceQuery}
 import akka.persistence.query.journal.leveldb.scaladsl.LeveldbReadJournal
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Source
+import com.example.PersistentSagaActor.TransactionalEventEnvelope
 
 /**
   * Companion.
   */
 object TaggedEventSubscription {
-  case class EventConfirmed(event: Any)
+  case class EventConfirmed(envelope: TransactionalEventEnvelope)
 }
 
 /**
@@ -36,7 +37,7 @@ trait TaggedEventSubscription { this: Actor =>
     val readJournal = PersistenceQuery(context.system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
     val source: Source[EventEnvelope, NotUsed] = readJournal.eventsByTag(eventTag, Offset.noOffset)
     source.map(_.event).runForeach {
-      case event => self ! EventConfirmed(event)
+      case envelope: TransactionalEventEnvelope => self ! EventConfirmed(envelope)
     }
   }
 
@@ -45,7 +46,7 @@ trait TaggedEventSubscription { this: Actor =>
     val readJournal = PersistenceQuery(context.system).readJournalFor[CassandraReadJournal](CassandraReadJournal.Identifier)
     val source: Source[EventEnvelope, NotUsed] = readJournal.eventsByTag(eventTag, Offset.noOffset)
     source.map(_.event).runForeach {
-      case event => self ! EventConfirmed(event)
+      case envelope: TransactionalEventEnvelope => self ! EventConfirmed(envelope)
     }
   }
 }

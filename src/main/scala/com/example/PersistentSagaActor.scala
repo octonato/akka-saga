@@ -35,8 +35,11 @@ object PersistentSagaActor {
     def entityId: EntityId
   }
 
+  // The base trait for any event for an entity as part of a saga.
+  trait TransactionalEntityEvent
+
   // Trait for any entity events participating in a saga.
-  trait TransactionalEvent
+  trait TransactionalEvent extends TransactionalEntityEvent
 
   // Envelope to wrap events.
   trait TransactionalEventEnvelope {
@@ -158,6 +161,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef)
                 pendingTransitionCheck()
               }
           }
+        case _ => // Ignore non-transactional event.
       }
 
     case Retry =>
@@ -190,6 +194,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef)
                 context.stop(self)
             })
           }
+        case _ => // Ignore non-transactional event.
       }
 
     case Retry =>
@@ -222,6 +227,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef)
                 context.stop(self)
             })
           }
+        case _ => // Ignore non-transactional event.
       }
 
     case Retry =>

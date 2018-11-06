@@ -1,4 +1,4 @@
-package com.example
+package com.example.bankaccount
 
 import akka.actor.{ActorLogging, Props, Stash}
 import akka.persistence.PersistentActor
@@ -46,7 +46,7 @@ class BankAccount extends PersistentActor with ActorLogging with Stash {
   import BankAccountStates._
   import BankAccountCommands._
   import BankAccountEvents._
-  import PersistentSagaActor._
+  import com.example.PersistentSagaActor._
 
   override def persistenceId: String = self.path.name
 

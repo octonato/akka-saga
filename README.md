@@ -50,3 +50,8 @@ See project/plugins.sbt. For credentials, please go here: https://www.lightbend.
 Set the body to: {"customerId": "customer1", "accountNumber": "accountNumber1"}
 Add the Content-Type header with a value of application/json
 You should see: CreateBankAccount accepted with number: accountNumber1
+
+## Todo
+* Not a big deal but the persistent bank account and bank account saga specs are sharing the same leveldb
+journal and therefore if one is not careful in reusing entity ids, can interfere with each other. It would be nice to have
+a cleanup of the database between specs.

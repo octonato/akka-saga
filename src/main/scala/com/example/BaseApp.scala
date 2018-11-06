@@ -15,7 +15,7 @@ import scala.concurrent.duration._
   */
 abstract class BaseApp(implicit val system: ActorSystem) {
 
-  import BankAccountCommands._
+  import bankaccount.BankAccountCommands._
 
   // Set up bank account cluster sharding
   val bankAccountEntityIdExtractor: ShardRegion.ExtractEntityId = {
@@ -30,7 +30,7 @@ abstract class BaseApp(implicit val system: ActorSystem) {
   }
   val bankAccountRegion: ActorRef = ClusterSharding(system).start(
     typeName = "bank-account",
-    entityProps = BankAccount.props(),
+    entityProps = bankaccount.BankAccount.props(),
     settings = ClusterShardingSettings(system),
     extractEntityId = bankAccountEntityIdExtractor,
     extractShardId = bankAccountShardIdExtractor
@@ -57,8 +57,8 @@ abstract class BaseApp(implicit val system: ActorSystem) {
   // Set up bank account query side projection.
   system.actorOf(
     ClusterSingletonManager.props(
-      singletonProps = BankAccountsQuery.props,
-      terminationMessage = BankAccountsQuery.Stop,
+      singletonProps = bankaccount.BankAccountsQuery.props,
+      terminationMessage = bankaccount.BankAccountsQuery.Stop,
       settings = ClusterSingletonManagerSettings(system)),
     name = "bank-accounts-query")
 
@@ -75,7 +75,7 @@ abstract class BaseApp(implicit val system: ActorSystem) {
     *
     * @return BankAccountHttpServer
     */
-  private def createHttpServer(): BankAccountHttpServer = {
+  private def createHttpServer(): AkkaSagaHttpServer = {
     implicit val timeout: Timeout = Timeout(5.seconds)
 
     val bankAccountsQuery = system.actorOf(
@@ -84,6 +84,6 @@ abstract class BaseApp(implicit val system: ActorSystem) {
         settings = ClusterSingletonProxySettings(system)),
       name = "bank-accounts-query-proxy")
 
-    new BankAccountHttpServer(bankAccountRegion, bankAccountSagaRegion, bankAccountsQuery)(system, timeout)
+    new AkkaSagaHttpServer(bankAccountRegion, bankAccountSagaRegion, bankAccountsQuery)(system, timeout)
   }
 }

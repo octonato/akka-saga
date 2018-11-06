@@ -1,7 +1,8 @@
-package com.example
+package com.example.bankaccount
 
 import akka.actor.{Actor, ActorLogging, Props}
 import com.example.PersistentSagaActor.TransactionalEventEnvelope
+import com.example.TaggedEventSubscription
 
 object BankAccountsQuery {
 
@@ -19,9 +20,9 @@ object BankAccountsQuery {
   */
 class BankAccountsQuery extends Actor with TaggedEventSubscription with ActorLogging {
 
-  import TaggedEventSubscription._
-  import BankAccountsQuery._
   import BankAccountEvents._
+  import BankAccountsQuery._
+  import TaggedEventSubscription._
 
   override val eventTag = BankAccount.EntityName
 

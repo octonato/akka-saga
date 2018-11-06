@@ -4,13 +4,14 @@ import akka.actor.{ActorRef, ActorSystem}
 import akka.http.scaladsl.Http
 import akka.stream.ActorMaterializer
 import akka.util.Timeout
+import com.example.bankaccount.BankAccountRoutes
 
 import scala.concurrent.ExecutionContext
 
 /**
   * A runtime composition of an Http server.
   */
-class BankAccountHttpServer(
+class AkkaSagaHttpServer(
   override val bankAccountRegion: ActorRef,
   override val bankAccountSagaRegion: ActorRef,
   override val bankAccountsQuery: ActorRef

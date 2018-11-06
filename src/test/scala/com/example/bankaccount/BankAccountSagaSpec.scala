@@ -1,15 +1,16 @@
-package com.example
+package com.example.bankaccount
 
 import akka.NotUsed
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.pattern.ask
 import akka.persistence.cassandra.query.scaladsl.CassandraReadJournal
-import akka.persistence.query.{EventEnvelope, Offset, PersistenceQuery}
 import akka.persistence.query.journal.leveldb.scaladsl.LeveldbReadJournal
+import akka.persistence.query.{EventEnvelope, Offset, PersistenceQuery}
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.Source
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.Timeout
+import com.example.PersistentSagaActor
 import com.typesafe.config.ConfigFactory
 import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 
@@ -57,16 +58,16 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
     TestKit.shutdownActorSystem(system)
   }
 
-  implicit val timeout = Timeout(60.seconds)
+  implicit val timeout = Timeout(20.seconds)
 
   "a BankAccountSaga" should {
 
     var TransactionId: String = "need to set this!"
 
     // Instantiate the bank accounts (sharding would do this in clustered mode).
-    system.actorOf(Props(classOf[BankAccount]), "accountNumber1")
-    system.actorOf(Props(classOf[BankAccount]), "accountNumber2")
-    system.actorOf(Props(classOf[BankAccount]), "accountNumber3")
+    system.actorOf(Props(classOf[BankAccount]), "accountNumber11")
+    system.actorOf(Props(classOf[BankAccount]), "accountNumber22")
+    system.actorOf(Props(classOf[BankAccount]), "accountNumber33")
 
     // Cluster shard mock.
     val bankAccountRegion = system.actorOf(Props(new Actor() {
@@ -85,9 +86,9 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
     }))
 
     // "Create" the bank accounts previously instantiated.
-    bankAccountRegion ! CreateBankAccount("customer1", "accountNumber1")
-    bankAccountRegion ! CreateBankAccount("customer1", "accountNumber2")
-    bankAccountRegion ! CreateBankAccount("customer1", "accountNumber3")
+    bankAccountRegion ! CreateBankAccount("customer1", "accountNumber11")
+    bankAccountRegion ! CreateBankAccount("customer1", "accountNumber22")
+    bankAccountRegion ! CreateBankAccount("customer1", "accountNumber33")
 
     val sagaProbe: TestProbe = TestProbe()
 
@@ -120,7 +121,7 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
     // --
 
     "commit transaction when no exceptions" in {
-      TransactionId = "transactionId1"
+      TransactionId = "transactionId11"
 
       val source: Source[EventEnvelope, NotUsed] = readJournal.eventsByTag(TransactionId, Offset.noOffset)
       source.map(_.event).runForeach {
@@ -132,9 +133,9 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
       sagaProbe.expectMsg(SagaState(TransactionId, Uninitialized))
 
       val cmds = Seq(
-        DepositFunds("accountNumber1", 10),
-        DepositFunds("accountNumber2", 20),
-        DepositFunds("accountNumber3", 30),
+        DepositFunds("accountNumber11", 10),
+        DepositFunds("accountNumber22", 20),
+        DepositFunds("accountNumber33", 30),
       )
 
       saga ! StartSaga(TransactionId, cmds)
@@ -145,12 +146,12 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
 
       val probe: TestProbe = TestProbe()
       val ExpectedEvents = Seq(
-        TransactionStarted(TransactionId, "accountNumber1", FundsDeposited("accountNumber1", 10)),
-        TransactionCleared(TransactionId, "accountNumber1", FundsDeposited("accountNumber1", 10)),
-        TransactionStarted(TransactionId, "accountNumber2", FundsDeposited("accountNumber2", 20)),
-        TransactionCleared(TransactionId, "accountNumber2", FundsDeposited("accountNumber2", 20)),
-        TransactionStarted(TransactionId, "accountNumber3", FundsDeposited("accountNumber3", 30)),
-        TransactionCleared(TransactionId, "accountNumber3", FundsDeposited("accountNumber3", 30))
+        TransactionStarted(TransactionId, "accountNumber11", FundsDeposited("accountNumber11", 10)),
+        TransactionCleared(TransactionId, "accountNumber11", FundsDeposited("accountNumber11", 10)),
+        TransactionStarted(TransactionId, "accountNumber22", FundsDeposited("accountNumber22", 20)),
+        TransactionCleared(TransactionId, "accountNumber22", FundsDeposited("accountNumber22", 20)),
+        TransactionStarted(TransactionId, "accountNumber33", FundsDeposited("accountNumber33", 30)),
+        TransactionCleared(TransactionId, "accountNumber33", FundsDeposited("accountNumber33", 30))
       )
 
       probe.awaitCond(Await.result((eventReceiver ? GetEvents)
@@ -164,15 +165,15 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
           state.transactionId should be(TransactionId)
           state.currentState should be(Complete)
           state.commands should be(cmds)
-          state.pendingConfirmed.sorted should be(Seq("accountNumber1", "accountNumber2", "accountNumber3"))
-          state.commitConfirmed.sorted should be(Seq("accountNumber1", "accountNumber2", "accountNumber3"))
+          state.pendingConfirmed.sorted should be(Seq("accountNumber11", "accountNumber22", "accountNumber33"))
+          state.commitConfirmed.sorted should be(Seq("accountNumber11", "accountNumber22", "accountNumber33"))
           state.rollbackConfirmed should be(Nil)
           state.exceptions should be(Nil)
       }
     }
 
     "rollback transaction when with exception" in {
-      TransactionId = "transactionId2"
+      TransactionId = "transactionId22"
       eventReceiver ! Reset
 
       val source: Source[EventEnvelope, NotUsed] = readJournal.eventsByTag(TransactionId, Offset.noOffset)
@@ -183,9 +184,9 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
       val saga = system.actorOf(PersistentSagaActor.props(bankAccountRegion), TransactionId)
 
       val cmds = Seq(
-        WithdrawFunds("accountNumber1", 11), // Account having balance of only 10
-        WithdrawFunds("accountNumber2", 20),
-        WithdrawFunds("accountNumber3", 30),
+        WithdrawFunds("accountNumber11", 11), // Account having balance of only 10
+        WithdrawFunds("accountNumber22", 20),
+        WithdrawFunds("accountNumber33", 30),
       )
 
       saga ! StartSaga(TransactionId, cmds)
@@ -195,11 +196,11 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
       val probe: TestProbe = TestProbe()
       val Expected: GetEventsResult = GetEventsResult(
         Seq(
-          TransactionStarted(TransactionId, "accountNumber2", FundsWithdrawn("accountNumber2", 20)),
-          TransactionReversed(TransactionId, "accountNumber2", FundsWithdrawn("accountNumber2", 20)),
-          TransactionStarted(TransactionId, "accountNumber3", FundsWithdrawn("accountNumber3", 30)),
-          TransactionReversed(TransactionId, "accountNumber3", FundsWithdrawn("accountNumber3", 30)),
-          TransactionException(TransactionId, "accountNumber1", InsufficientFunds("accountNumber1", 10, 11)),
+          TransactionStarted(TransactionId, "accountNumber22", FundsWithdrawn("accountNumber22", 20)),
+          TransactionReversed(TransactionId, "accountNumber22", FundsWithdrawn("accountNumber22", 20)),
+          TransactionStarted(TransactionId, "accountNumber33", FundsWithdrawn("accountNumber33", 30)),
+          TransactionReversed(TransactionId, "accountNumber33", FundsWithdrawn("accountNumber33", 30)),
+          TransactionException(TransactionId, "accountNumber11", InsufficientFunds("accountNumber11", 10, 11)),
         )
       )
 
@@ -214,10 +215,10 @@ class BankAccountSagaSpec extends TestKit(ActorSystem("BankAccountSagaSpec", Con
           state.transactionId should be(TransactionId)
           state.currentState should be(Complete)
           state.commands should be(cmds)
-          state.pendingConfirmed.sorted should be(Seq("accountNumber2", "accountNumber3"))
+          state.pendingConfirmed.sorted should be(Seq("accountNumber22", "accountNumber33"))
           state.commitConfirmed.sorted should be(Nil)
-          state.rollbackConfirmed.sortWith(_ < _) should be(Seq("accountNumber2", "accountNumber3"))
-          state.exceptions should be(Seq(TransactionException(TransactionId, "accountNumber1", InsufficientFunds("accountNumber1", 10, 11))))
+          state.rollbackConfirmed.sortWith(_ < _) should be(Seq("accountNumber22", "accountNumber33"))
+          state.exceptions should be(Seq(TransactionException(TransactionId, "accountNumber11", InsufficientFunds("accountNumber11", 10, 11))))
       }
     }
   }

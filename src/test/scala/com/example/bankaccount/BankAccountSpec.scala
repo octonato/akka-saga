@@ -1,15 +1,16 @@
-package com.example
+package com.example.bankaccount
 
 import akka.NotUsed
 import akka.actor.{ActorSystem, PoisonPill, Props, Terminated}
 import akka.pattern.ask
 import akka.persistence.cassandra.query.scaladsl.CassandraReadJournal
-import akka.persistence.query.{EventEnvelope, PersistenceQuery}
 import akka.persistence.query.journal.leveldb.scaladsl.LeveldbReadJournal
+import akka.persistence.query.{EventEnvelope, PersistenceQuery}
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Sink, Source}
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import akka.util.Timeout
+import com.example.PersistentSagaActor
 import com.typesafe.config.ConfigFactory
 import org.scalatest.{BeforeAndAfterAll, Matchers, WordSpecLike}
 
@@ -53,7 +54,7 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
     TestKit.shutdownActorSystem(system)
   }
 
-  implicit val timeout = Timeout(60.seconds)
+  implicit val timeout = Timeout(20.seconds)
 
   "a BankAccount" should {
 
@@ -72,9 +73,6 @@ class BankAccountSpec extends TestKit(ActorSystem("BankAccountSpec", ConfigFacto
       PersistenceQuery(system).readJournalFor[CassandraReadJournal](CassandraReadJournal.Identifier)
     else
       PersistenceQuery(system).readJournalFor[LeveldbReadJournal](LeveldbReadJournal.Identifier)
-
-    // Set up bank account query side projection.
-    val bankAccountsQuery = system.actorOf(BankAccountsQuery.props, name = "bank-accounts-query")
 
     "properly be created with CreateBankAccount command" in {
       val cmd = CreateBankAccount(CustomerNumber, AccountNumber)

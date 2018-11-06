@@ -1,6 +1,7 @@
-package com.example
+package com.example.bankaccount
 
 import com.example.PersistentSagaActor.TransactionalCommand
+import com.example._
 
 object BankAccountCommands {
 
