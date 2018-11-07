@@ -154,7 +154,7 @@ class PersistentSagaActor(persistentEntityRegion: ActorRef)
                 pendingTransitionCheck()
               }
             case _: TransactionException =>
-              if (!state.exceptions.contains(envelope.entityId)) {
+              if (!state.exceptions.exists( _.event.entityId == envelope.event.entityId)) {
                 state = state.copy(exceptions = state.exceptions :+ envelope)
                 log.error(s"Transaction rolling back when possible due to exception on account ${envelope.entityId}.")
                 saveSnapshot(state)
